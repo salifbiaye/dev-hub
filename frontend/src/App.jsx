@@ -3198,6 +3198,155 @@ function NewGroupForm({ onCreate }) {
   )
 }
 
+// Small area+line chart, no chart library — keeps the bundle light and
+// matches the app's existing hand-rolled SVG icons/illustrations. Values
+// are plotted against a fixed 0..max scale rather than an auto-fit one, so
+// the line's height stays meaningful poll-to-poll instead of rescaling
+// (and looking falsely dramatic) every time the peak changes slightly.
+function Sparkline({ data, max, color }) {
+  const width = 200
+  const height = 44
+  const safeMax = Math.max(max, 1)
+  const padded = data.length > 1 ? data : [...data, ...data]
+  const points = padded.map((v, i) => {
+    const x = (i / (padded.length - 1)) * width
+    const y = height - (Math.min(v, safeMax) / safeMax) * height
+    return [x, y]
+  })
+  const linePath = `M ${points.map((p) => p.join(',')).join(' L ')}`
+  const areaPath = `M 0,${height} L ${points.map((p) => p.join(',')).join(' L ')} L ${width},${height} Z`
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} className="h-11 w-full" preserveAspectRatio="none">
+      <path d={areaPath} fill={color} opacity="0.14" />
+      <path d={linePath} fill="none" stroke={color} strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+const STATS_HISTORY_LEN = 40
+
+function StatCard({ stat, history }) {
+  const cpuHistory = history?.cpu || [stat.cpu_percent]
+  const memHistory = history?.mem || [stat.memory_mb]
+  const memMax = Math.max(256, ...memHistory)
+
+  return (
+    <div className="rounded-xl border border-border bg-surface p-3 shadow-[var(--card-shadow)]">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-text">{stat.name}</p>
+          <p className="truncate font-mono text-[11px] text-muted">{stat.config}</p>
+        </div>
+        <span className="shrink-0 rounded-full bg-accent-bg px-2 py-0.5 text-[10px] text-accent">
+          {stat.process_count} proc.
+        </span>
+      </div>
+      <div className="flex flex-col gap-3">
+        <div>
+          <div className="mb-1 flex items-center justify-between text-[10px] text-muted">
+            <span>CPU</span>
+            <span className="font-mono text-text">{stat.cpu_percent.toFixed(1)}%</span>
+          </div>
+          <Sparkline data={cpuHistory} max={100} color="var(--color-accent)" />
+        </div>
+        <div>
+          <div className="mb-1 flex items-center justify-between text-[10px] text-muted">
+            <span>RAM</span>
+            <span className="font-mono text-text">
+              {stat.memory_mb >= 1024 ? `${(stat.memory_mb / 1024).toFixed(2)} Go` : `${stat.memory_mb.toFixed(0)} Mo`}
+            </span>
+          </div>
+          <Sparkline data={memHistory} max={memMax} color="var(--color-success)" />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+const UNGROUPED_KEY = '__ungrouped__'
+
+function StatsPanel({ repos, groups, groupByPath }) {
+  const [stats, setStats] = useState([])
+  const historyRef = useRef({})
+  const [, forceTick] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    async function poll() {
+      const result = await api()?.get_process_stats()
+      if (cancelled) return
+      const list = Array.isArray(result) ? result : []
+      setStats(list)
+
+      const seenKeys = new Set()
+      for (const s of list) {
+        const key = `${s.path}-${s.config}`
+        seenKeys.add(key)
+        const entry = historyRef.current[key] || { cpu: [], mem: [] }
+        entry.cpu = [...entry.cpu, s.cpu_percent].slice(-STATS_HISTORY_LEN)
+        entry.mem = [...entry.mem, s.memory_mb].slice(-STATS_HISTORY_LEN)
+        historyRef.current[key] = entry
+      }
+      // Drop history for runs that stopped, so restarting the same config
+      // later starts a fresh trend instead of a stale one.
+      for (const key of Object.keys(historyRef.current)) {
+        if (!seenKeys.has(key)) delete historyRef.current[key]
+      }
+      forceTick((t) => t + 1)
+    }
+    poll()
+    // Only runs while this tab is actually mounted (visited), so idle CPU
+    // sampling doesn't happen in the background when nobody's looking.
+    const interval = setInterval(poll, 1500)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [])
+
+  if (stats.length === 0) {
+    return <EmptyState message="Aucun process en cours — lance un projet pour voir ses stats CPU/RAM ici." />
+  }
+
+  const enriched = stats.map((s) => ({
+    ...s,
+    name: repos.find((r) => r.path === s.path)?.name || s.path.split(/[\\/]/).pop(),
+    group: groupByPath[s.path] || UNGROUPED_KEY,
+  }))
+
+  const byGroup = {}
+  for (const s of enriched) {
+    ;(byGroup[s.group] ||= []).push(s)
+  }
+  const orderedGroupKeys = [...groups.map((g) => g.name), UNGROUPED_KEY].filter((k) => byGroup[k])
+
+  return (
+    <div className="flex flex-col gap-6">
+      {orderedGroupKeys.map((key) => (
+        <div key={key}>
+          <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted">
+            {key === UNGROUPED_KEY ? (
+              'Sans groupe'
+            ) : (
+              <>
+                <IconLayers className="h-3 w-3" />
+                {key}
+              </>
+            )}
+          </h3>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {byGroup[key].map((s) => {
+              const statKey = `${s.path}-${s.config}`
+              return <StatCard key={statKey} stat={s} history={historyRef.current[statKey]} />
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function GroupCard({ group, onOpen, onDelete, onRename }) {
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState(group.name)
@@ -3397,6 +3546,13 @@ function ProcessesPanel({
   const active = tabs.find((t) => t.path === activeTab) || tabs[0]
   const url = (active && urls[active.path]) || ''
   const tabsScroll = useAutoHideScroll()
+  // Dev servers print "Local: http://localhost:X" then "Network: http://
+  // 192.168.x.x:X" right after, often in the same or next PTY chunk — the
+  // `url` prop hasn't round-tripped through the parent yet when the second
+  // one arrives, so a plain "if (!url)" guard reads a stale empty value
+  // for both and the LAN one can win the race. This ref is updated
+  // synchronously instead, and only ever upgrades loopback over LAN.
+  const detectedUrlRef = useRef({})
 
   // Proxy mode is per-tab: one preview may need the header-stripping proxy
   // while another points at a local dev server that frames fine on its own.
@@ -3678,7 +3834,14 @@ function ProcessesPanel({
                     key={active.terminalId}
                     terminalId={active.terminalId}
                     onNotify={onNotify}
-                    onUrlDetected={(found) => { if (!url) onUrlChange(active.path, found) }}
+                    onUrlDetected={(found) => {
+                      const key = active.path
+                      const current = detectedUrlRef.current[key] ?? url
+                      if (!current || (!isLocalUrl(current) && isLocalUrl(found))) {
+                        detectedUrlRef.current[key] = found
+                        onUrlChange(key, found)
+                      }
+                    }}
                     className="flex-1 overflow-hidden bg-base p-2"
                   />
                 ) : (
@@ -3714,6 +3877,7 @@ const AI_PROVIDERS = [
 const SHORTCUTS = [
   { keys: 'Ctrl K', label: 'Recherche globale (fichiers, branches, tous projets)' },
   { keys: 'Ctrl H', label: 'Cette aide' },
+  { keys: 'F11', label: 'Plein écran (pratique dans Processus)' },
   { keys: 'Échap', label: 'Fermer la fenêtre active' },
 ]
 
@@ -4280,6 +4444,11 @@ export default function App() {
 
   useEffect(() => {
     function onKeyDown(e) {
+      if (e.key === 'F11') {
+        e.preventDefault()
+        api()?.toggle_fullscreen()
+        return
+      }
       if (e.key === 'Escape') {
         if (globalSearchOpen || shortcutsOpen || aiSettingsOpen) {
           setGlobalSearchOpen(false)
@@ -4356,6 +4525,7 @@ export default function App() {
   const [listTab, setListTab] = useState('groups')
   const [groupSearch, setGroupSearch] = useState('')
   const [repoSearch, setRepoSearch] = useState('')
+  const [repoGroupFilter, setRepoGroupFilter] = useState('all')
   const [runningPaths, setRunningPaths] = useState(() => new Set())
   const [runningMeta, setRunningMeta] = useState({})
   const [processesOpen, setProcessesOpen] = useState(false)
@@ -4715,11 +4885,15 @@ export default function App() {
   const selectedRepo = repos.find((r) => r.path === selectedPath) || null
   const showList = ready && !selectedRepo && !selectedGroup
   const filteredGroups = groups.filter((g) => g.name.toLowerCase().includes(groupSearch.trim().toLowerCase()))
-  const filteredRepos = repos.filter((r) =>
-    `${r.name} ${r.path}`.toLowerCase().includes(repoSearch.trim().toLowerCase())
-  )
   const groupByPath = {}
   groups.forEach((g) => (g.repos || []).forEach((p) => { groupByPath[p] = g.name }))
+  const filteredRepos = repos.filter((r) => {
+    const matchesSearch = `${r.name} ${r.path}`.toLowerCase().includes(repoSearch.trim().toLowerCase())
+    if (!matchesSearch) return false
+    if (repoGroupFilter === 'all') return true
+    if (repoGroupFilter === 'ungrouped') return !groupByPath[r.path]
+    return groupByPath[r.path] === repoGroupFilter
+  })
 
   return (
     <div className="min-h-screen bg-base text-text">
@@ -4881,6 +5055,7 @@ export default function App() {
               {[
                 { id: 'groups', label: 'Groupes' },
                 { id: 'repos', label: 'Projets' },
+                { id: 'stats', label: 'Stats' },
               ].map((tab) => (
                 <button
                   key={tab.id}
@@ -4921,12 +5096,22 @@ export default function App() {
 
             {listTab === 'repos' && (
               <section>
-                <div className="mb-3">
+                <div className="mb-3 flex gap-2">
                   <input
                     value={repoSearch}
                     onChange={(e) => setRepoSearch(e.target.value)}
                     placeholder="Rechercher un projet…"
                     className="w-64 rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+                  />
+                  <Select
+                    value={repoGroupFilter}
+                    onChange={setRepoGroupFilter}
+                    className="flex w-48 shrink-0 cursor-pointer items-center justify-between rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+                    options={[
+                      { value: 'all', label: 'Tous les groupes' },
+                      { value: 'ungrouped', label: 'Sans groupe' },
+                      ...groups.map((g) => ({ value: g.name, label: g.name })),
+                    ]}
                   />
                 </div>
                 {repos.length === 0 ? (
@@ -4951,6 +5136,12 @@ export default function App() {
                     ))}
                   </div>
                 )}
+              </section>
+            )}
+
+            {listTab === 'stats' && (
+              <section>
+                <StatsPanel repos={repos} groups={groups} groupByPath={groupByPath} />
               </section>
             )}
           </div>

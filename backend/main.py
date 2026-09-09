@@ -20,6 +20,7 @@ from pathlib import Path
 
 import webview
 import winpty
+import psutil
 import psycopg2
 import pymongo
 import pymysql
@@ -275,6 +276,12 @@ _window_maximized = False
 _terminals = {}
 _terminal_buffers = {}
 _TERMINAL_BUFFER_CAP = 200_000
+
+# psutil.Process.cpu_percent(None) reports the delta since that *same
+# object's* last call — a fresh Process() every poll would always read as
+# 0%, so live instances are kept around across polls just for this.
+_psutil_procs = {}
+_CPU_COUNT = psutil.cpu_count() or 1
 
 _PG_URI_RE = re.compile(r'postgres(?:ql)?://(?:([^:@/]+)(?::([^@/]*))?@)?([^:/\s\'"]+)(?::(\d+))?/([^?\s\'"]+)')
 _JDBC_PG_RE = re.compile(r'jdbc:postgresql://([^:/\s\'"]+)(?::(\d+))?/([^?\s\'"]+)')
@@ -1514,6 +1521,69 @@ class Api:
             )
         return orphans
 
+    def get_process_stats(self):
+        global _psutil_procs
+        seen_pids = set()
+        results = []
+
+        for key, entry in _running.items():
+            proc = _terminals.get(entry.get("terminal_id"))
+            root_pid = getattr(proc, "pid", None) if proc else None
+            if not root_pid:
+                continue
+            try:
+                root = psutil.Process(root_pid)
+                tree = [root] + root.children(recursive=True)
+            except psutil.NoSuchProcess:
+                continue
+
+            cpu = 0.0
+            mem = 0
+            alive = 0
+            for p in tree:
+                cached = _psutil_procs.get(p.pid)
+                if cached is None:
+                    # First time seeing this pid: prime the delta tracker and
+                    # skip its CPU contribution *this* round. Calling
+                    # cpu_percent(None) twice back-to-back (prime, then
+                    # immediately read for the total) measures against an
+                    # ~0ms window, which is exactly what was spiking every
+                    # fresh process to ~100% on its very first poll.
+                    try:
+                        p.cpu_percent(None)
+                        mem += p.memory_info().rss
+                        alive += 1
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                    _psutil_procs[p.pid] = p
+                    seen_pids.add(p.pid)
+                    continue
+                seen_pids.add(p.pid)
+                try:
+                    # Raw psutil cpu_percent is "% of one core" (can exceed
+                    # 100 on multi-core work) — dividing by the core count
+                    # matches the intuitive Task Manager-style 0-100 reading.
+                    cpu += cached.cpu_percent(None) / _CPU_COUNT
+                    mem += cached.memory_info().rss
+                    alive += 1
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+
+            results.append(
+                {
+                    "path": entry["path"],
+                    "config": entry["config"],
+                    "cpu_percent": round(cpu, 1),
+                    "memory_mb": round(mem / (1024 * 1024), 1),
+                    "process_count": alive,
+                }
+            )
+
+        # Drop cached Process objects for pids that no longer exist — otherwise
+        # this dict grows forever across a long session of starting/stopping runs.
+        _psutil_procs = {pid: p for pid, p in _psutil_procs.items() if pid in seen_pids}
+        return results
+
     def kill_orphan(self, pid):
         try:
             subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=10, creationflags=subprocess.CREATE_NO_WINDOW)
@@ -1984,6 +2054,10 @@ class Api:
 
     def close_window(self):
         webview.windows[0].destroy()
+        return {"ok": True}
+
+    def toggle_fullscreen(self):
+        webview.windows[0].toggle_fullscreen()
         return {"ok": True}
 
     def detect_database(self, path):
@@ -2575,13 +2649,19 @@ def _kill_all_running():
     _running.clear()
 
 
+ICON_DESIGN_VERSION = "v2"
+
+
 def _theme_icon_path(hex_color):
     # Cached per color under APP_DATA_DIR — regenerating a handful of small
     # PNGs/ICOs on first use per theme is cheap, but there's no reason to
-    # redo it on every switch back to an already-seen theme.
+    # redo it on every switch back to an already-seen theme. The version
+    # tag means a design change (e.g. v1 -> v2 dropped an extra chevron
+    # that didn't match the in-app logo) invalidates old cached files
+    # instead of silently keeping the outdated art forever.
     icons_dir = APP_DATA_DIR / "icons"
     icons_dir.mkdir(exist_ok=True)
-    ico_path = icons_dir / f"{hex_color.lstrip('#')}.ico"
+    ico_path = icons_dir / f"{hex_color.lstrip('#')}-{ICON_DESIGN_VERSION}.ico"
     if ico_path.exists():
         return ico_path
 
