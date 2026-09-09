@@ -335,6 +335,14 @@ export function IconAlertCircle({ className }) {
   )
 }
 
+export function IconPlay({ className }) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M7 4.5v15l13-7.5L7 4.5Z" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
+
 export function IconPalette({ className }) {
   return (
     <svg {...base} className={className}>

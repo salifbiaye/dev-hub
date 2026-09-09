@@ -1,4 +1,5 @@
 import ctypes
+import ctypes.wintypes as wintypes
 import fnmatch
 import json
 import os
@@ -56,6 +57,18 @@ THEME_ACCENTS = {
     "movember": "#c17d3a",
     "dia-de-muertos": "#ff5f9e",
     "winter-day": "#3a7bd5",
+    "solarized-dark": "#268bd2",
+    "rose-pine": "#c4a7e7",
+    "ayu-dark": "#ffb454",
+    "synthwave": "#ff2e97",
+    "night-owl": "#7fdbca",
+    "palenight": "#f78c6c",
+    "horizon": "#e95678",
+    "everforest": "#a7c080",
+    "indigo-black": "#6366f1",
+    "crimson-black": "#ff3355",
+    "emerald-black": "#10b981",
+    "amber-black": "#f5a623",
 }
 
 # JetBrains Toolbox keeps a stale "idea" script pointing at an uninstalled version on this
@@ -2056,10 +2069,6 @@ class Api:
         webview.windows[0].destroy()
         return {"ok": True}
 
-    def toggle_fullscreen(self):
-        webview.windows[0].toggle_fullscreen()
-        return {"ok": True}
-
     def detect_database(self, path):
         parsed = _detect_database(path)
         if not parsed:
@@ -2639,6 +2648,98 @@ def _call_openai_compatible(ai, prompt):
     return data["choices"][0]["message"]["content"]
 
 
+class _MSG(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", wintypes.HWND),
+        ("message", wintypes.UINT),
+        ("wParam", wintypes.WPARAM),
+        ("lParam", wintypes.LPARAM),
+        ("time", wintypes.DWORD),
+        ("pt", wintypes.POINT),
+    ]
+
+
+_WM_HOTKEY = 0x0312
+_VK_F11 = 0x7A
+_VK_ESCAPE = 0x1B
+_F11_HOTKEY_ID = 1
+_ESCAPE_HOTKEY_ID = 2
+_PM_REMOVE = 1
+
+
+def _is_window_fullscreen(win):
+    from webview.platforms.winforms import BrowserView
+
+    form = BrowserView.instances.get(win.uid)
+    return bool(getattr(form, "is_fullscreen", False)) if form else False
+
+
+def _set_fullscreen(win, value):
+    if _is_window_fullscreen(win) == value:
+        return
+    win.toggle_fullscreen()
+    # OS-level fullscreen only hides the Windows taskbar — "like a browser"
+    # also means Dev Hub's own chrome (tabs, header buttons) should
+    # disappear, which only the frontend can do. There's no pywebview event
+    # for this, so the new state is pushed into the page directly;
+    # toggle_fullscreen() is synchronous (it Invokes onto the UI thread and
+    # blocks until done), so is_fullscreen is already current here.
+    is_fs = _is_window_fullscreen(win)
+    win.evaluate_js(f"window.dispatchEvent(new CustomEvent('devhub-fullscreen', {{detail: {str(is_fs).lower()}}}))")
+
+
+def _f11_fullscreen_watch():
+    # A page-level JS keydown listener can't catch F11/Escape while focus
+    # is inside the Processus preview iframe — that's a separate document,
+    # so its key events never reach the parent window's listeners at all.
+    # RegisterHotKey with hwnd=None claims the key for the calling
+    # *thread* system-wide, which would otherwise steal it from every
+    # other app (browsers included, and Escape is far too common a key
+    # elsewhere) even while Dev Hub sits in the background — so both are
+    # only actually registered while Dev Hub is the foreground window,
+    # checked on the same loop that drains the hotkey messages. Escape
+    # only ever exits fullscreen, never enters it, so it doesn't fight
+    # with Escape's normal JS-side job of closing modals when not
+    # fullscreen (a global hotkey firing doesn't suppress the key from
+    # still reaching the focused control's own handlers too).
+    user32 = ctypes.windll.user32
+    msg = _MSG()
+    registered = False
+    try:
+        while True:
+            try:
+                hwnd = win32gui.FindWindow(None, "Dev Hub")
+            except Exception:
+                hwnd = None
+            focused = bool(hwnd) and win32gui.GetForegroundWindow() == hwnd
+
+            if focused and not registered:
+                registered = bool(user32.RegisterHotKey(None, _F11_HOTKEY_ID, 0, _VK_F11))
+                registered = bool(user32.RegisterHotKey(None, _ESCAPE_HOTKEY_ID, 0, _VK_ESCAPE)) and registered
+            elif not focused and registered:
+                user32.UnregisterHotKey(None, _F11_HOTKEY_ID)
+                user32.UnregisterHotKey(None, _ESCAPE_HOTKEY_ID)
+                registered = False
+
+            while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, _PM_REMOVE):
+                if msg.message != _WM_HOTKEY:
+                    continue
+                try:
+                    win = webview.windows[0]
+                    if msg.wParam == _F11_HOTKEY_ID:
+                        _set_fullscreen(win, not _is_window_fullscreen(win))
+                    elif msg.wParam == _ESCAPE_HOTKEY_ID:
+                        _set_fullscreen(win, False)
+                except Exception:
+                    pass
+
+            time.sleep(0.15)
+    finally:
+        if registered:
+            user32.UnregisterHotKey(None, _F11_HOTKEY_ID)
+            user32.UnregisterHotKey(None, _ESCAPE_HOTKEY_ID)
+
+
 def _kill_all_running():
     for proc in list(_terminals.values()):
         try:
@@ -2754,6 +2855,7 @@ def main():
     # the current session's own dir is always skipped (still locked), so
     # there's nothing to lose by doing this unattended on every startup.
     threading.Thread(target=api.clean_stale_webview_temp, daemon=True).start()
+    threading.Thread(target=_f11_fullscreen_watch, daemon=True).start()
 
     # Match the taskbar icon to whichever theme was last saved, rather than
     # leaving it on the default accent until the user happens to switch

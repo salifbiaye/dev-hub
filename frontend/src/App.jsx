@@ -36,6 +36,7 @@ import {
   IconAlertCircle,
   IconTable,
   IconPalette,
+  IconPlay,
 } from './icons'
 
 function api() {
@@ -154,7 +155,7 @@ function GroupSelect({ groups, onPick }) {
       </button>
       {open && (
         <div
-          className="absolute left-0 top-full z-10 mt-1 w-40 overflow-hidden rounded-md border border-border-strong bg-surface shadow-lg"
+          className="absolute right-0 top-full z-10 mt-1 w-40 overflow-hidden rounded-md border border-border-strong bg-surface shadow-lg"
           onClick={(e) => e.stopPropagation()}
         >
           {groups.map((g) => (
@@ -225,7 +226,7 @@ function IdeButton({ ides, defaultIde, launching, onLaunch, size = 'md' }) {
 
 const TERMINAL_LABELS = { cmd: 'CMD', powershell: 'PowerShell', bash: 'Git Bash' }
 
-function TerminalButton({ path, terminals, onNotify }) {
+function TerminalButton({ path, terminals, onNotify, compact = false }) {
   const [open, setOpen] = useState(false)
 
   async function launch(kind) {
@@ -235,6 +236,20 @@ function TerminalButton({ path, terminals, onNotify }) {
   }
 
   if (!terminals || terminals.length === 0) return null
+
+  if (compact) {
+    return (
+      <div className="relative inline-flex" onClick={(e) => e.stopPropagation()}>
+        <button
+          onClick={() => launch(terminals[0])}
+          title={`Ouvrir ${TERMINAL_LABELS[terminals[0]]} ici`}
+          className="cursor-pointer hover:text-text"
+        >
+          <IconTerminal className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    )
+  }
 
   return (
     <div className="relative inline-flex" onClick={(e) => e.stopPropagation()}>
@@ -252,7 +267,7 @@ function TerminalButton({ path, terminals, onNotify }) {
         </button>
       )}
       {open && (
-        <div className="absolute left-0 top-full z-10 mt-1 w-36 overflow-hidden rounded-md border border-border-strong bg-surface shadow-lg">
+        <div className="absolute right-0 top-full z-10 mt-1 w-36 overflow-hidden rounded-md border border-border-strong bg-surface shadow-lg">
           {terminals.map((kind) => (
             <button
               key={kind}
@@ -293,96 +308,122 @@ function EmptyState({ message, className, size = 'md' }) {
   )
 }
 
-function RepoCard({ repo, groups, ides, onOpen, onOpenIde, onRemove, onAddToGroup, groupContext, onRemoveFromGroup, currentGroup, selectable, selected, onToggleSelect, runningCount = 0 }) {
-  const [launching, setLaunching] = useState(false)
+function GroupSection({ title, count, children, columns = 1 }) {
+  const [open, setOpen] = useState(true)
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full cursor-pointer items-center gap-1.5 px-1 py-1.5 text-left text-[11px] font-medium text-muted hover:text-text"
+      >
+        <IconChevronDown className={`h-3 w-3 shrink-0 transition-transform duration-150 ${open ? '' : '-rotate-90'}`} />
+        {title}
+        <span className="text-[10px] font-normal text-muted/70">· {count}</span>
+      </button>
+      {open && (
+        <div
+          className={`gap-1 rounded-lg border border-border bg-surface p-1.5 ${
+            columns > 1 ? 'grid grid-cols-2' : 'flex flex-col'
+          }`}
+        >
+          {children}
+        </div>
+      )}
+    </div>
+  )
+}
 
-  async function handleOpenIde(ide) {
-    setLaunching(true)
-    try {
-      await onOpenIde(repo.path, ide)
-      setTimeout(() => setLaunching(false), 3000)
-    } catch {
-      // A rejected bridge call used to leave the spinner stuck forever.
-      setLaunching(false)
-    }
-  }
+function ProjectRow({ repo, isRunning, onOpen, onStop, onStart, terminals, onNotify, grouped, groups, onAddToGroup, onRemove }) {
+  const defaultRun = (repo.runs || []).find((r) => r.default) || (repo.runs || [])[0]
 
   return (
     <div
       onClick={() => onOpen(repo)}
-      className="group cursor-pointer rounded-xl border border-border bg-surface p-4 flex flex-col gap-3 shadow-[var(--card-shadow)] transition-all duration-150 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface-hover hover:shadow-[var(--card-shadow-hover)]"
+      className="group flex cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 text-left hover:bg-surface-hover"
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 items-start gap-2.5">
-          {selectable ? (
-            <input
-              type="checkbox"
-              checked={!!selected}
-              onClick={(e) => e.stopPropagation()}
-              onChange={() => onToggleSelect(repo.path)}
-              title="Inclure dans le lancement du groupe"
-              className="mt-2 h-3.5 w-3.5 shrink-0 cursor-pointer"
-            />
-          ) : (
-            <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-accent-bg text-accent">
-              <IconFolder className="h-4 w-4" />
-            </span>
-          )}
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              {runningCount > 0 && (
-                <span
-                  className="h-1.5 w-1.5 shrink-0 rounded-full bg-success"
-                  title={`${runningCount} processus en cours`}
-                />
-              )}
-              <h3 className="truncate text-sm font-medium text-text">{repo.name}</h3>
-            </div>
-            <p className="truncate font-mono text-[11px] text-muted">{repo.path}</p>
-          </div>
-        </div>
-        {groupContext ? (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onRemoveFromGroup(repo.path)
-            }}
-            className="shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-danger cursor-pointer"
-            title="Retirer du groupe"
-          >
-            <IconClose className="h-3.5 w-3.5" />
-          </button>
-        ) : (
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              onRemove(repo.path)
-            }}
-            className="shrink-0 text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-danger cursor-pointer"
-            title="Retirer de la liste"
-          >
-            <IconTrash className="h-3.5 w-3.5" />
-          </button>
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isRunning ? 'bg-success' : 'bg-border-strong'}`} />
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
+        <IconFolder className="h-3.5 w-3.5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <span className="truncate text-[13px] font-medium text-text">{repo.name}</span>
+        {defaultRun && (
+          <span className="ml-2 font-mono text-[10.5px] text-muted">{defaultRun.name}</span>
         )}
       </div>
-
-      <StatusBadges status={repo.status} />
-
-      <div className="flex items-center justify-between pt-1">
-        <IdeButton ides={ides} defaultIde={repo.ide} launching={launching} onLaunch={handleOpenIde} />
-        {!groupContext &&
-          (currentGroup ? (
-            <span className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted">
-              <IconLayers className="h-3 w-3" />
-              {currentGroup}
-            </span>
-          ) : (
-            <GroupSelect groups={groups} onPick={(name) => onAddToGroup(name, repo.path)} />
-          ))}
+      <div
+        className="flex shrink-0 items-center gap-3 text-muted opacity-0 transition-opacity group-hover:opacity-100"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <TerminalButton path={repo.path} terminals={terminals} onNotify={onNotify} compact />
+        {defaultRun && (
+          <button
+            onClick={() => (isRunning ? onStop(repo.path, defaultRun.name) : onStart(repo.path, defaultRun.name, repo.name, defaultRun.url))}
+            title={isRunning ? `Arrêter ${defaultRun.name}` : `Lancer ${defaultRun.name}`}
+            className={`cursor-pointer ${isRunning ? 'text-danger hover:opacity-70' : 'hover:text-text'}`}
+          >
+            {isRunning ? <IconClose className="h-3.5 w-3.5" /> : <IconPlay className="h-3.5 w-3.5" />}
+          </button>
+        )}
+        {!grouped && <GroupSelect groups={groups} onPick={(name) => onAddToGroup(name, repo.path)} />}
+        <button onClick={() => onRemove(repo.path)} className="cursor-pointer hover:text-danger" title="Retirer de la liste">
+          <IconTrash className="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
   )
 }
+
+function GroupMemberRow({ repo, selected, onToggleSelect, isRunning, runningCount, onOpen, onStart, onStop, onRemoveFromGroup, terminals, onNotify }) {
+  const defaultRun = (repo.runs || []).find((r) => r.default) || (repo.runs || [])[0]
+  const branch = repo.status?.branch
+
+  return (
+    <div onClick={() => onOpen(repo)} className="group flex cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 hover:bg-surface-hover">
+      <input
+        type="checkbox"
+        checked={!!selected}
+        onClick={(e) => e.stopPropagation()}
+        onChange={() => onToggleSelect(repo.path)}
+        title="Inclure dans le lancement du groupe"
+        className="h-3.5 w-3.5 shrink-0 cursor-pointer"
+      />
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
+        <IconFolder className="h-3.5 w-3.5" />
+      </span>
+      <span className="truncate text-[13px] font-medium text-text">{repo.name}</span>
+      {branch && (
+        <span className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted">
+          <IconBranch className="h-3 w-3" />
+          {branch}
+        </span>
+      )}
+      {defaultRun && <span className="shrink-0 font-mono text-[10.5px] text-muted">{defaultRun.name}</span>}
+      <span className={`ml-auto shrink-0 text-[11px] ${isRunning ? 'text-success' : 'text-muted'}`}>
+        {isRunning ? `${runningCount} en cours` : 'arrêté'}
+      </span>
+      <div
+        className="flex shrink-0 items-center gap-3 text-muted opacity-0 transition-opacity group-hover:opacity-100"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <TerminalButton path={repo.path} terminals={terminals} onNotify={onNotify} compact />
+        {defaultRun && (
+          <button
+            onClick={() => (isRunning ? onStop(repo.path, defaultRun.name) : onStart(repo.path, defaultRun.name, repo.name, defaultRun.url))}
+            title={isRunning ? `Arrêter ${defaultRun.name}` : `Lancer ${defaultRun.name}`}
+            className={`cursor-pointer ${isRunning ? 'text-danger hover:opacity-70' : 'hover:text-text'}`}
+          >
+            {isRunning ? <IconClose className="h-3.5 w-3.5" /> : <IconPlay className="h-3.5 w-3.5" />}
+          </button>
+        )}
+        <button onClick={() => onRemoveFromGroup(repo.path)} className="cursor-pointer hover:text-danger" title="Retirer du groupe">
+          <IconClose className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  )
+}
+
 
 function EnvPanel({ repo, onNotify }) {
   const [files, setFiles] = useState([])
@@ -2344,7 +2385,7 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
 
   async function startConfig(cfgName) {
     const cfg = configs.find((c) => c.name === cfgName)
-    const result = await onStart(repo.path, cfgName, cfg?.url)
+    const result = await onStart(repo.path, cfgName, repo.name, cfg?.url)
     if (!result?.error) setActiveRunName(cfgName)
   }
 
@@ -3203,9 +3244,7 @@ function NewGroupForm({ onCreate }) {
 // are plotted against a fixed 0..max scale rather than an auto-fit one, so
 // the line's height stays meaningful poll-to-poll instead of rescaling
 // (and looking falsely dramatic) every time the peak changes slightly.
-function Sparkline({ data, max, color }) {
-  const width = 200
-  const height = 44
+function Sparkline({ data, max, color, width = 200, height = 44, className = 'h-11 w-full' }) {
   const safeMax = Math.max(max, 1)
   const padded = data.length > 1 ? data : [...data, ...data]
   const points = padded.map((v, i) => {
@@ -3217,7 +3256,7 @@ function Sparkline({ data, max, color }) {
   const areaPath = `M 0,${height} L ${points.map((p) => p.join(',')).join(' L ')} L ${width},${height} Z`
 
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className="h-11 w-full" preserveAspectRatio="none">
+    <svg viewBox={`0 0 ${width} ${height}`} className={className} preserveAspectRatio="none">
       <path d={areaPath} fill={color} opacity="0.14" />
       <path d={linePath} fill="none" stroke={color} strokeWidth="1.75" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
@@ -3226,40 +3265,28 @@ function Sparkline({ data, max, color }) {
 
 const STATS_HISTORY_LEN = 40
 
-function StatCard({ stat, history }) {
+function StatRow({ stat, history }) {
   const cpuHistory = history?.cpu || [stat.cpu_percent]
   const memHistory = history?.mem || [stat.memory_mb]
   const memMax = Math.max(256, ...memHistory)
+  const memLabel = stat.memory_mb >= 1024 ? `${(stat.memory_mb / 1024).toFixed(2)} Go` : `${stat.memory_mb.toFixed(0)} Mo`
 
   return (
-    <div className="rounded-xl border border-border bg-surface p-3 shadow-[var(--card-shadow)]">
-      <div className="mb-3 flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium text-text">{stat.name}</p>
-          <p className="truncate font-mono text-[11px] text-muted">{stat.config}</p>
-        </div>
-        <span className="shrink-0 rounded-full bg-accent-bg px-2 py-0.5 text-[10px] text-accent">
-          {stat.process_count} proc.
-        </span>
-      </div>
-      <div className="flex flex-col gap-3">
-        <div>
-          <div className="mb-1 flex items-center justify-between text-[10px] text-muted">
-            <span>CPU</span>
-            <span className="font-mono text-text">{stat.cpu_percent.toFixed(1)}%</span>
-          </div>
-          <Sparkline data={cpuHistory} max={100} color="var(--color-accent)" />
-        </div>
-        <div>
-          <div className="mb-1 flex items-center justify-between text-[10px] text-muted">
-            <span>RAM</span>
-            <span className="font-mono text-text">
-              {stat.memory_mb >= 1024 ? `${(stat.memory_mb / 1024).toFixed(2)} Go` : `${stat.memory_mb.toFixed(0)} Mo`}
-            </span>
-          </div>
-          <Sparkline data={memHistory} max={memMax} color="var(--color-success)" />
-        </div>
-      </div>
+    <div className="flex items-center gap-3 rounded-md bg-base px-2.5 py-2">
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
+        <IconFolder className="h-3.5 w-3.5" />
+      </span>
+      <span className="w-28 shrink-0 truncate text-[13px] font-medium text-text">{stat.name}</span>
+      <Sparkline data={cpuHistory} max={100} color="var(--color-accent)" width={60} height={20} className="h-5 w-[60px] shrink-0" />
+      <span className="w-11 shrink-0 font-mono text-[11px] text-accent">{stat.cpu_percent.toFixed(1)}%</span>
+      <Sparkline data={memHistory} max={memMax} color="var(--color-success)" width={60} height={20} className="h-5 w-[60px] shrink-0" />
+      <span className="w-14 shrink-0 font-mono text-[11px] text-success">{memLabel}</span>
+      <span
+        className="ml-auto shrink-0 rounded-full bg-accent-bg px-2 py-0.5 text-[10px] text-accent"
+        title="Nombre de process système impliqués (le process principal + tous ses enfants, ex: npm + node + workers)"
+      >
+        {stat.process_count} process
+      </span>
     </div>
   )
 }
@@ -3279,7 +3306,9 @@ function StatsPanel({ repos, groups, groupByPath }) {
       const list = Array.isArray(result) ? result : []
       setStats(list)
 
-      const seenKeys = new Set()
+      const seenKeys = new Set(['__total__'])
+      let totalCpu = 0
+      let totalMem = 0
       for (const s of list) {
         const key = `${s.path}-${s.config}`
         seenKeys.add(key)
@@ -3287,7 +3316,13 @@ function StatsPanel({ repos, groups, groupByPath }) {
         entry.cpu = [...entry.cpu, s.cpu_percent].slice(-STATS_HISTORY_LEN)
         entry.mem = [...entry.mem, s.memory_mb].slice(-STATS_HISTORY_LEN)
         historyRef.current[key] = entry
+        totalCpu += s.cpu_percent
+        totalMem += s.memory_mb
       }
+      const totalEntry = historyRef.current.__total__ || { cpu: [], mem: [] }
+      totalEntry.cpu = [...totalEntry.cpu, totalCpu].slice(-STATS_HISTORY_LEN)
+      totalEntry.mem = [...totalEntry.mem, totalMem].slice(-STATS_HISTORY_LEN)
+      historyRef.current.__total__ = totalEntry
       // Drop history for runs that stopped, so restarting the same config
       // later starts a fresh trend instead of a stale one.
       for (const key of Object.keys(historyRef.current)) {
@@ -3321,28 +3356,30 @@ function StatsPanel({ repos, groups, groupByPath }) {
   }
   const orderedGroupKeys = [...groups.map((g) => g.name), UNGROUPED_KEY].filter((k) => byGroup[k])
 
+  const totalStat = {
+    name: 'Total',
+    config: `${stats.length} process actif${stats.length > 1 ? 's' : ''}`,
+    cpu_percent: stats.reduce((n, s) => n + s.cpu_percent, 0),
+    memory_mb: stats.reduce((n, s) => n + s.memory_mb, 0),
+    process_count: stats.reduce((n, s) => n + s.process_count, 0),
+  }
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       {orderedGroupKeys.map((key) => (
-        <div key={key}>
-          <h3 className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-muted">
-            {key === UNGROUPED_KEY ? (
-              'Sans groupe'
-            ) : (
-              <>
-                <IconLayers className="h-3 w-3" />
-                {key}
-              </>
-            )}
-          </h3>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {byGroup[key].map((s) => {
-              const statKey = `${s.path}-${s.config}`
-              return <StatCard key={statKey} stat={s} history={historyRef.current[statKey]} />
-            })}
-          </div>
-        </div>
+        <GroupSection key={key} title={key === UNGROUPED_KEY ? 'Sans groupe' : key} count={byGroup[key].length} columns={2}>
+          {byGroup[key].map((s) => {
+            const statKey = `${s.path}-${s.config}`
+            return <StatRow key={statKey} stat={s} history={historyRef.current[statKey]} />
+          })}
+        </GroupSection>
       ))}
+      <div>
+        <p className="mb-2 px-1 text-[11px] font-medium text-muted">Total — tous projets confondus</p>
+        <div className="max-w-2xl rounded-lg border border-accent/30 bg-accent-bg p-1.5">
+          <StatRow stat={totalStat} history={historyRef.current.__total__} />
+        </div>
+      </div>
     </div>
   )
 }
@@ -3361,54 +3398,49 @@ function GroupCard({ group, onOpen, onDelete, onRename }) {
   return (
     <div
       onClick={() => !editing && onOpen(group.name)}
-      className="group flex cursor-pointer items-center justify-between rounded-xl border border-border bg-surface px-4 py-3 shadow-[var(--card-shadow)] transition-all duration-150 hover:-translate-y-0.5 hover:border-border-strong hover:bg-surface-hover hover:shadow-[var(--card-shadow-hover)]"
+      className="group flex cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 text-left hover:bg-surface-hover"
     >
-      <div className="flex min-w-0 items-center gap-2.5">
-        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-bg text-accent">
-          <IconLayers className="h-4 w-4" />
+      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
+        <IconLayers className="h-3.5 w-3.5" />
+      </span>
+      <div className="min-w-0 flex-1">
+        {editing ? (
+          <input
+            autoFocus
+            value={name}
+            onClick={(e) => e.stopPropagation()}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={commit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') commit()
+              if (e.key === 'Escape') {
+                setName(group.name)
+                setEditing(false)
+              }
+            }}
+            className="rounded-md border border-accent bg-base px-1.5 py-0.5 text-[13px] text-text outline-none"
+          />
+        ) : (
+          <span className="truncate text-[13px] font-medium text-text">{group.name}</span>
+        )}
+        <span className="ml-2 font-mono text-[10.5px] text-muted">
+          {group.count} projet{group.count > 1 ? 's' : ''}
         </span>
-        <div className="min-w-0">
-          {editing ? (
-            <input
-              autoFocus
-              value={name}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={commit}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') commit()
-                if (e.key === 'Escape') {
-                  setName(group.name)
-                  setEditing(false)
-                }
-              }}
-              className="rounded-md border border-accent bg-base px-1.5 py-0.5 text-sm text-text outline-none"
-            />
-          ) : (
-            <p className="truncate text-sm font-medium text-text">{group.name}</p>
-          )}
-          <p className="text-[11px] text-muted">
-            {group.count} projet{group.count > 1 ? 's' : ''}
-          </p>
-        </div>
       </div>
-      <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div
+        className="flex shrink-0 items-center gap-3 text-muted opacity-0 transition-opacity group-hover:opacity-100"
+        onClick={(e) => e.stopPropagation()}
+      >
         <button
-          onClick={(e) => {
-            e.stopPropagation()
-            setEditing(true)
-          }}
-          className="text-muted hover:text-text cursor-pointer"
+          onClick={() => setEditing(true)}
+          className="cursor-pointer hover:text-text"
           title="Renommer"
         >
           <IconPencil className="h-3.5 w-3.5" />
         </button>
         <button
-          onClick={(e) => {
-            e.stopPropagation()
-            onDelete(group.name)
-          }}
-          className="text-muted hover:text-danger cursor-pointer"
+          onClick={() => onDelete(group.name)}
+          className="cursor-pointer hover:text-danger"
           title="Supprimer le groupe"
         >
           <IconTrash className="h-3.5 w-3.5" />
@@ -3542,6 +3574,8 @@ function ProcessesPanel({
   onReorderTabs,
   themeMode,
   onThemeChange,
+  appFullscreen,
+  lockedUrlKeys,
 }) {
   const active = tabs.find((t) => t.path === activeTab) || tabs[0]
   const url = (active && urls[active.path]) || ''
@@ -3674,6 +3708,8 @@ function ProcessesPanel({
 
   return (
     <div className="fixed inset-0 z-30 flex flex-col bg-base">
+      {!appFullscreen && (
+      <>
       <TitleBar />
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <div ref={tabsScroll.ref} onScroll={tabsScroll.onScroll} className="theme-scroll flex items-center gap-1 overflow-x-auto">
@@ -3719,6 +3755,8 @@ function ProcessesPanel({
             </button>
           </div>
         </div>
+      </>
+      )}
 
         {active && (
           <div
@@ -3731,6 +3769,7 @@ function ProcessesPanel({
                 className="flex flex-col border-r border-border"
                 style={{ width: showLogs ? `${splitPct}%` : '100%' }}
               >
+                {!appFullscreen && (
                 <div className="flex items-center gap-2 border-b border-border p-2">
                   <input
                     value={url}
@@ -3778,6 +3817,7 @@ function ProcessesPanel({
                     <IconMaximize className="h-3.5 w-3.5" />
                   </button>
                 </div>
+                )}
                 {url ? (
                   <iframe
                     key={`${frameSrc}-${reloadKey}`}
@@ -3809,6 +3849,7 @@ function ProcessesPanel({
 
             {showLogs && (
               <div className="flex min-h-0 flex-col" style={{ width: showNav ? `${100 - splitPct}%` : '100%' }}>
+                {!appFullscreen && (
                 <div className="flex items-center justify-between border-b border-border p-2">
                   <span className="truncate font-mono text-[11px] text-muted">{active.realPath}</span>
                   <div className="flex items-center gap-2">
@@ -3829,6 +3870,7 @@ function ProcessesPanel({
                     </button>
                   </div>
                 </div>
+                )}
                 {active.terminalId ? (
                   <PtyTerminal
                     key={active.terminalId}
@@ -3836,6 +3878,7 @@ function ProcessesPanel({
                     onNotify={onNotify}
                     onUrlDetected={(found) => {
                       const key = active.path
+                      if (lockedUrlKeys?.has(key)) return
                       const current = detectedUrlRef.current[key] ?? url
                       if (!current || (!isLocalUrl(current) && isLocalUrl(found))) {
                         detectedUrlRef.current[key] = found
@@ -4246,6 +4289,18 @@ const THEMES = [
   { id: 'movember', label: 'Movember', bg: '#1c1712', swatch: ['#9c8b73', '#c17d3a', '#7a8b4a', '#a8442e'] },
   { id: 'dia-de-muertos', label: 'Dia De Muertos', bg: '#160f1a', swatch: ['#a48ba8', '#ff5f9e', '#3ec9a7', '#f8a531'] },
   { id: 'winter-day', label: 'Winter Day', bg: '#f7f9fc', swatch: ['#5b6b82', '#3a7bd5', '#2f9e6e', '#c07a1e'] },
+  { id: 'solarized-dark', label: 'Solarized Dark', bg: '#002b36', swatch: ['#586e75', '#268bd2', '#859900', '#dc322f'] },
+  { id: 'rose-pine', label: 'Rosé Pine', bg: '#191724', swatch: ['#6e6a86', '#c4a7e7', '#9ccfd8', '#eb6f92'] },
+  { id: 'ayu-dark', label: 'Ayu Dark', bg: '#0a0e14', swatch: ['#4d5566', '#ffb454', '#91b362', '#f07178'] },
+  { id: 'synthwave', label: 'Synthwave', bg: '#1a0b2e', swatch: ['#8d6fa8', '#ff2e97', '#2de2e6', '#ff2e63'] },
+  { id: 'night-owl', label: 'Night Owl', bg: '#011627', swatch: ['#5f7e97', '#7fdbca', '#addb67', '#ef5350'] },
+  { id: 'palenight', label: 'Palenight', bg: '#292d3e', swatch: ['#676e95', '#f78c6c', '#c3e88d', '#ff5370'] },
+  { id: 'horizon', label: 'Horizon', bg: '#1c1e26', swatch: ['#6c6f93', '#e95678', '#29d398', '#f43e5c'] },
+  { id: 'everforest', label: 'Everforest', bg: '#2d353b', swatch: ['#859289', '#a7c080', '#83c092', '#e67e80'] },
+  { id: 'indigo-black', label: 'Indigo Black', bg: '#0a0a0f', swatch: ['#6b6b85', '#6366f1', '#34d399', '#f87171'] },
+  { id: 'crimson-black', label: 'Crimson Black', bg: '#0a0a0c', swatch: ['#8a6b70', '#ff3355', '#4ade80', '#e11d48'] },
+  { id: 'emerald-black', label: 'Emerald Black', bg: '#0a0d0c', swatch: ['#6b8578', '#10b981', '#10b981', '#f87171'] },
+  { id: 'amber-black', label: 'Amber Black', bg: '#0c0a08', swatch: ['#8a7860', '#f5a623', '#84cc16', '#ef4444'] },
 ]
 
 function ThemeSwatch({ theme, className }) {
@@ -4283,7 +4338,7 @@ function ThemePicker({ mode, onChange }) {
         Thème
       </Button>
       {open && (
-        <div className="absolute right-0 top-full z-20 mt-1.5 w-96 overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl">
+        <div className="absolute right-0 top-full z-40 mt-1.5 w-96 overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl">
           <p className="border-b border-border px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted">
             Thèmes
           </p>
@@ -4441,14 +4496,25 @@ export default function App() {
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false)
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const [appFullscreen, setAppFullscreen] = useState(false)
+
+  useEffect(() => {
+    // Pushed from Python right after the native F11 toggle — OS fullscreen
+    // alone only hides the Windows taskbar, "like a browser" also means
+    // hiding Dev Hub's own chrome (header, tabs), which is a UI decision
+    // only the frontend can make.
+    function onFullscreenChange(e) {
+      setAppFullscreen(!!e.detail)
+    }
+    window.addEventListener('devhub-fullscreen', onFullscreenChange)
+    return () => window.removeEventListener('devhub-fullscreen', onFullscreenChange)
+  }, [])
 
   useEffect(() => {
     function onKeyDown(e) {
-      if (e.key === 'F11') {
-        e.preventDefault()
-        api()?.toggle_fullscreen()
-        return
-      }
+      // F11 is handled natively (Win32 RegisterHotKey) instead of here — a
+      // focused preview iframe (Processus tab) is a separate document, so
+      // key events inside it never reach this window-level listener at all.
       if (e.key === 'Escape') {
         if (globalSearchOpen || shortcutsOpen || aiSettingsOpen) {
           setGlobalSearchOpen(false)
@@ -4543,6 +4609,13 @@ export default function App() {
   function setProcessUrl(key, url) {
     setProcessUrls((prev) => ({ ...prev, [key]: url }))
   }
+
+  // A URL the user explicitly saved on a run config (e.g. a remote staging
+  // link, or here an EAS builds dashboard someone pointed a config at)
+  // must never be silently swapped out by log auto-detection — only a run
+  // that started with no configured URL should let the terminal fill it
+  // in, and only then does "prefer localhost over a LAN IP" apply.
+  const lockedUrlKeysRef = useRef(new Set())
 
   // A project can now run several configs at once, so every run is tracked
   // by (path, config name) instead of just path — one project's two "npm
@@ -4810,7 +4883,12 @@ export default function App() {
         [key]: { realPath: path, repoName: repoName || path, configName: name, terminalId: result.terminal_id },
       }))
       setActiveProcessTab(key)
-      if (url) setProcessUrl(key, url)
+      if (url) {
+        setProcessUrl(key, url)
+        lockedUrlKeysRef.current.add(key)
+      } else {
+        lockedUrlKeysRef.current.delete(key)
+      }
       notify(`"${name}" lancé`)
     }
     return result
@@ -4873,6 +4951,7 @@ export default function App() {
       return next
     })
     setActiveProcessTab((prev) => (prev === key ? null : prev))
+    lockedUrlKeysRef.current.delete(key)
   }
 
   async function killAllOrphans() {
@@ -4897,16 +4976,17 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-base text-text">
-      <TitleBar />
+      {!appFullscreen && <TitleBar />}
       <SplashScreen ready={ready} />
-      <header className="flex items-center justify-between border-b border-border px-6 py-4">
-        <div className="flex items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-accent text-white">
+      {!appFullscreen && (
+      <header className="flex items-center justify-between gap-4 border-b border-border px-6 py-4">
+        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-white">
             <IconLayers className="h-4 w-4" />
           </span>
           <h1 className="text-[15px] font-semibold tracking-tight">Dev Hub</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
           <ZoomControl zoom={zoom} onChange={setZoom} />
           <Button variant="subtle" onClick={() => setGlobalSearchOpen(true)}>
             <IconSearch className="h-3.5 w-3.5" />
@@ -4959,6 +5039,7 @@ export default function App() {
           <ThemePicker mode={themeMode} onChange={setThemeMode} />
         </div>
       </header>
+      )}
 
       {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
       {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
@@ -5004,6 +5085,8 @@ export default function App() {
             onReorderTabs={setTabOrder}
             themeMode={themeMode}
             onThemeChange={setThemeMode}
+            appFullscreen={appFullscreen}
+            lockedUrlKeys={lockedUrlKeysRef.current}
           />
         </div>
       )}
@@ -5085,7 +5168,7 @@ export default function App() {
                 ) : filteredGroups.length === 0 ? (
                   <EmptyState message={`Aucun groupe ne correspond à "${groupSearch}".`} size="sm" />
                 ) : (
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-1.5">
                     {filteredGroups.map((g) => (
                       <GroupCard key={g.name} group={g} onOpen={setSelectedGroup} onDelete={deleteGroup} onRename={renameGroup} />
                     ))}
@@ -5119,21 +5202,35 @@ export default function App() {
                 ) : filteredRepos.length === 0 ? (
                   <EmptyState message={`Aucun projet ne correspond à "${repoSearch}".`} size="sm" />
                 ) : (
-                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    {filteredRepos.map((repo) => (
-                      <RepoCard
-                        key={repo.path}
-                        repo={repo}
-                        groups={groups}
-                        ides={ides}
-                        onOpen={(r) => setSelectedPath(r.path)}
-                        onOpenIde={openIde}
-                        onRemove={removeRepo}
-                        onAddToGroup={addToGroup}
-                        currentGroup={groupByPath[repo.path]}
-                        runningCount={runningCountFor(repo.path)}
-                      />
-                    ))}
+                  <div className="flex flex-col gap-4">
+                    {(() => {
+                      const byGroup = {}
+                      for (const repo of filteredRepos) {
+                        const key = groupByPath[repo.path] || UNGROUPED_KEY
+                        ;(byGroup[key] ||= []).push(repo)
+                      }
+                      const orderedKeys = [...groups.map((g) => g.name), UNGROUPED_KEY].filter((k) => byGroup[k])
+                      return orderedKeys.map((key) => (
+                        <GroupSection key={key} title={key === UNGROUPED_KEY ? 'Sans groupe' : key} count={byGroup[key].length}>
+                          {byGroup[key].map((repo) => (
+                            <ProjectRow
+                              key={repo.path}
+                              repo={repo}
+                              isRunning={runningCountFor(repo.path) > 0}
+                              onOpen={(r) => setSelectedPath(r.path)}
+                              onStart={startRun}
+                              onStop={stopRun}
+                              terminals={terminals}
+                              onNotify={notify}
+                              grouped={key !== UNGROUPED_KEY}
+                              groups={groups}
+                              onAddToGroup={addToGroup}
+                              onRemove={removeRepo}
+                            />
+                          ))}
+                        </GroupSection>
+                      ))
+                    })()}
                   </div>
                 )}
               </section>
@@ -5198,21 +5295,21 @@ export default function App() {
             {groupRepos.length === 0 ? (
               <EmptyState message="Ce groupe est vide — ajoute des projets depuis la liste principale." />
             ) : (
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-1.5">
                 {groupRepos.map((repo) => (
-                  <RepoCard
+                  <GroupMemberRow
                     key={repo.path}
                     repo={repo}
-                    groups={groups}
-                    ides={ides}
-                    groupContext={selectedGroup}
-                    onOpen={(r) => setSelectedPath(r.path)}
-                    onOpenIde={openIde}
-                    onRemoveFromGroup={removeFromGroup}
-                    selectable
                     selected={groupSelection.has(repo.path)}
                     onToggleSelect={toggleGroupSelection}
+                    isRunning={runningCountFor(repo.path) > 0}
                     runningCount={runningCountFor(repo.path)}
+                    onOpen={(r) => setSelectedPath(r.path)}
+                    onStart={startRun}
+                    onStop={stopRun}
+                    onRemoveFromGroup={removeFromGroup}
+                    terminals={terminals}
+                    onNotify={notify}
                   />
                 ))}
               </div>
