@@ -1,0 +1,6 @@
+pywebview>=5.3
+pywinpty>=3.0
+pywin32>=310
+psycopg2-binary>=2.9
+pymysql>=1.1
+pymongo>=4.6

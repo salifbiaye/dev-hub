@@ -1,0 +1,423 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-base: #0a0a0c;
+  --color-surface: #111114;
+  --color-surface-hover: #18181c;
+  --color-border: #232327;
+  --color-border-strong: #303035;
+  --color-text: #ededf0;
+  --color-muted: #8b8b93;
+  --color-accent: #6e56cf;
+  --color-accent-hover: #7c66db;
+  --color-accent-bg: rgba(110, 86, 207, 0.14);
+  --color-success: #3ddc8c;
+  --color-success-bg: rgba(61, 220, 140, 0.12);
+  --color-warning: #e5a63c;
+  --color-warning-bg: rgba(229, 166, 60, 0.12);
+  --color-danger: #f0616d;
+  --color-danger-bg: rgba(240, 97, 109, 0.12);
+
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: dark;
+  --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.4), 0 1px 2px -1px rgba(0, 0, 0, 0.4);
+  --card-shadow-hover: 0 4px 8px -2px rgba(0, 0, 0, 0.45), 0 2px 4px -2px rgba(0, 0, 0, 0.4);
+}
+
+/* Explicit theme picker only — no more OS-preference auto-switching, so a
+   chosen theme never gets silently overridden by the system's light/dark
+   setting. */
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --color-base: #ffffff;
+  --color-surface: #f8f8f9;
+  --color-surface-hover: #eeeef0;
+  --color-border: #e0e0e5;
+  --color-border-strong: #c7c7ce;
+  --color-text: #131316;
+  --color-muted: #63636c;
+  --color-accent: #6e56cf;
+  --color-accent-hover: #5d47b8;
+  --color-accent-bg: #ece8fa;
+  --color-success: #157a3c;
+  --color-success-bg: #e2f6e9;
+  --color-warning: #9a5610;
+  --color-warning-bg: #fbf0dc;
+  --color-danger: #c8262c;
+  --color-danger-bg: #fbe7e7;
+  --card-shadow: none;
+  --card-shadow-hover: none;
+}
+
+:root[data-theme='tokyo-night'] {
+  color-scheme: dark;
+  --color-base: #1a1b26;
+  --color-surface: #1f2335;
+  --color-surface-hover: #292e42;
+  --color-border: #292e42;
+  --color-border-strong: #3b4261;
+  --color-text: #c0caf5;
+  --color-muted: #565f89;
+  --color-accent: #7aa2f7;
+  --color-accent-hover: #89b4fa;
+  --color-accent-bg: rgba(122, 162, 247, 0.16);
+  --color-success: #9ece6a;
+  --color-success-bg: rgba(158, 206, 106, 0.14);
+  --color-warning: #e0af68;
+  --color-warning-bg: rgba(224, 175, 104, 0.14);
+  --color-danger: #f7768e;
+  --color-danger-bg: rgba(247, 118, 142, 0.14);
+}
+
+:root[data-theme='monokai'] {
+  color-scheme: dark;
+  --color-base: #272822;
+  --color-surface: #2d2e27;
+  --color-surface-hover: #3e3d32;
+  --color-border: #3e3d32;
+  --color-border-strong: #49483e;
+  --color-text: #f8f8f2;
+  --color-muted: #75715e;
+  --color-accent: #66d9ef;
+  --color-accent-hover: #85e5f5;
+  --color-accent-bg: rgba(102, 217, 239, 0.16);
+  --color-success: #a6e22e;
+  --color-success-bg: rgba(166, 226, 46, 0.14);
+  --color-warning: #fd971f;
+  --color-warning-bg: rgba(253, 151, 31, 0.14);
+  --color-danger: #f92672;
+  --color-danger-bg: rgba(249, 38, 114, 0.14);
+}
+
+:root[data-theme='catppuccin-mocha'] {
+  color-scheme: dark;
+  --color-base: #1e1e2e;
+  --color-surface: #24243a;
+  --color-surface-hover: #313244;
+  --color-border: #313244;
+  --color-border-strong: #45475a;
+  --color-text: #cdd6f4;
+  --color-muted: #a6adc8;
+  --color-accent: #cba6f7;
+  --color-accent-hover: #b4befe;
+  --color-accent-bg: rgba(203, 166, 247, 0.16);
+  --color-success: #a6e3a1;
+  --color-success-bg: rgba(166, 227, 161, 0.14);
+  --color-warning: #f9e2af;
+  --color-warning-bg: rgba(249, 226, 175, 0.14);
+  --color-danger: #f38ba8;
+  --color-danger-bg: rgba(243, 139, 168, 0.14);
+}
+
+:root[data-theme='dracula'] {
+  color-scheme: dark;
+  --color-base: #282a36;
+  --color-surface: #2f3240;
+  --color-surface-hover: #44475a;
+  --color-border: #44475a;
+  --color-border-strong: #6272a4;
+  --color-text: #f8f8f2;
+  --color-muted: #6272a4;
+  --color-accent: #bd93f9;
+  --color-accent-hover: #caa9fa;
+  --color-accent-bg: rgba(189, 147, 249, 0.16);
+  --color-success: #50fa7b;
+  --color-success-bg: rgba(80, 250, 123, 0.14);
+  --color-warning: #ffb86c;
+  --color-warning-bg: rgba(255, 184, 108, 0.14);
+  --color-danger: #ff5555;
+  --color-danger-bg: rgba(255, 85, 85, 0.14);
+}
+
+:root[data-theme='nord'] {
+  color-scheme: dark;
+  --color-base: #2e3440;
+  --color-surface: #3b4252;
+  --color-surface-hover: #434c5e;
+  --color-border: #434c5e;
+  --color-border-strong: #4c566a;
+  --color-text: #eceff4;
+  --color-muted: #8b96ad;
+  --color-accent: #88c0d0;
+  --color-accent-hover: #8fbcbb;
+  --color-accent-bg: rgba(136, 192, 208, 0.16);
+  --color-success: #a3be8c;
+  --color-success-bg: rgba(163, 190, 140, 0.14);
+  --color-warning: #ebcb8b;
+  --color-warning-bg: rgba(235, 203, 139, 0.14);
+  --color-danger: #bf616a;
+  --color-danger-bg: rgba(191, 97, 106, 0.14);
+}
+
+:root[data-theme='gruvbox-dark'] {
+  color-scheme: dark;
+  --color-base: #282828;
+  --color-surface: #32302f;
+  --color-surface-hover: #3c3836;
+  --color-border: #3c3836;
+  --color-border-strong: #504945;
+  --color-text: #ebdbb2;
+  --color-muted: #a89984;
+  --color-accent: #fe8019;
+  --color-accent-hover: #fabd2f;
+  --color-accent-bg: rgba(254, 128, 25, 0.16);
+  --color-success: #b8bb26;
+  --color-success-bg: rgba(184, 187, 38, 0.14);
+  --color-warning: #fabd2f;
+  --color-warning-bg: rgba(250, 189, 47, 0.14);
+  --color-danger: #fb4934;
+  --color-danger-bg: rgba(251, 73, 52, 0.14);
+}
+
+/* Below: sourced from official open-source palettes (tokyonight.nvim,
+   Catppuccin, atom-one-*-theme). */
+
+:root[data-theme='tokyo-day'] {
+  color-scheme: light;
+  --color-base: #e1e2e7;
+  --color-surface: #e9e9ec;
+  --color-surface-hover: #d5d6db;
+  --color-border: #d5d6db;
+  --color-border-strong: #c1c3c9;
+  --color-text: #3760bc;
+  --color-muted: #848cb5;
+  --color-accent: #2e7de9;
+  --color-accent-hover: #3d59a1;
+  --color-accent-bg: #dde6fb;
+  --color-success: #587539;
+  --color-success-bg: #e5f0dc;
+  --color-warning: #8f5e15;
+  --color-warning-bg: #f6ecd9;
+  --color-danger: #8c4351;
+  --color-danger-bg: #f5dfe2;
+  --card-shadow: none;
+  --card-shadow-hover: none;
+}
+
+:root[data-theme='catppuccin-latte'] {
+  color-scheme: light;
+  --color-base: #eff1f5;
+  --color-surface: #e6e9ef;
+  --color-surface-hover: #dce0e8;
+  --color-border: #dce0e8;
+  --color-border-strong: #ccd0da;
+  --color-text: #4c4f69;
+  --color-muted: #6c6f85;
+  --color-accent: #8839ef;
+  --color-accent-hover: #7287fd;
+  --color-accent-bg: #ece0fc;
+  --color-success: #40a02b;
+  --color-success-bg: #e2f3dd;
+  --color-warning: #df8e1d;
+  --color-warning-bg: #faedd7;
+  --color-danger: #d20f39;
+  --color-danger-bg: #fbdfe4;
+  --card-shadow: none;
+  --card-shadow-hover: none;
+}
+
+:root[data-theme='atom-one-dark'] {
+  color-scheme: dark;
+  --color-base: #282c34;
+  --color-surface: #2c313a;
+  --color-surface-hover: #3a3f4b;
+  --color-border: #3a3f4b;
+  --color-border-strong: #4b5263;
+  --color-text: #abb2bf;
+  --color-muted: #5c6370;
+  --color-accent: #61afef;
+  --color-accent-hover: #7fc0f5;
+  --color-accent-bg: rgba(97, 175, 239, 0.16);
+  --color-success: #98c379;
+  --color-success-bg: rgba(152, 195, 121, 0.14);
+  --color-warning: #e5c07b;
+  --color-warning-bg: rgba(229, 192, 123, 0.14);
+  --color-danger: #e06c75;
+  --color-danger-bg: rgba(224, 108, 117, 0.14);
+}
+
+:root[data-theme='atom-one-light'] {
+  color-scheme: light;
+  --color-base: #fafafa;
+  --color-surface: #f0f0f1;
+  --color-surface-hover: #e5e5e6;
+  --color-border: #e5e5e6;
+  --color-border-strong: #d3d3d4;
+  --color-text: #383a42;
+  --color-muted: #a0a1a7;
+  --color-accent: #4078f2;
+  --color-accent-hover: #5285f5;
+  --color-accent-bg: #e2ebfd;
+  --color-success: #50a14f;
+  --color-success-bg: #e1f3e1;
+  --color-warning: #986801;
+  --color-warning-bg: #f5e9d2;
+  --color-danger: #e45649;
+  --color-danger-bg: #fbe1e0;
+  --card-shadow: none;
+  --card-shadow-hover: none;
+}
+
+/* Below: Termius doesn't publish hex values for its seasonal presets, so
+   these are original palettes in the spirit of each name rather than exact
+   recreations. */
+
+:root[data-theme='halloween'] {
+  color-scheme: dark;
+  --color-base: #1b1520;
+  --color-surface: #241a2e;
+  --color-surface-hover: #2f2338;
+  --color-border: #2f2338;
+  --color-border-strong: #3d2b4a;
+  --color-text: #f0e6d2;
+  --color-muted: #8a7a99;
+  --color-accent: #ff7518;
+  --color-accent-hover: #ff8c3d;
+  --color-accent-bg: rgba(255, 117, 24, 0.16);
+  --color-success: #8fbc4a;
+  --color-success-bg: rgba(143, 188, 74, 0.14);
+  --color-warning: #ffb347;
+  --color-warning-bg: rgba(255, 179, 71, 0.14);
+  --color-danger: #e6304a;
+  --color-danger-bg: rgba(230, 48, 74, 0.14);
+}
+
+:root[data-theme='diwali'] {
+  color-scheme: dark;
+  --color-base: #1a0f1f;
+  --color-surface: #241729;
+  --color-surface-hover: #2f1f38;
+  --color-border: #2f1f38;
+  --color-border-strong: #402a4d;
+  --color-text: #fbe7c6;
+  --color-muted: #a68a91;
+  --color-accent: #f2b705;
+  --color-accent-hover: #ffd23f;
+  --color-accent-bg: rgba(242, 183, 5, 0.16);
+  --color-success: #4caf50;
+  --color-success-bg: rgba(76, 175, 80, 0.14);
+  --color-warning: #ff9800;
+  --color-warning-bg: rgba(255, 152, 0, 0.14);
+  --color-danger: #c1272d;
+  --color-danger-bg: rgba(193, 39, 45, 0.14);
+}
+
+:root[data-theme='movember'] {
+  color-scheme: dark;
+  --color-base: #1c1712;
+  --color-surface: #241d16;
+  --color-surface-hover: #2e251b;
+  --color-border: #2e251b;
+  --color-border-strong: #3d3122;
+  --color-text: #eee0ce;
+  --color-muted: #9c8b73;
+  --color-accent: #c17d3a;
+  --color-accent-hover: #d4924f;
+  --color-accent-bg: rgba(193, 125, 58, 0.16);
+  --color-success: #7a8b4a;
+  --color-success-bg: rgba(122, 139, 74, 0.14);
+  --color-warning: #d9a441;
+  --color-warning-bg: rgba(217, 164, 65, 0.14);
+  --color-danger: #a8442e;
+  --color-danger-bg: rgba(168, 68, 46, 0.14);
+}
+
+:root[data-theme='dia-de-muertos'] {
+  color-scheme: dark;
+  --color-base: #160f1a;
+  --color-surface: #1f1626;
+  --color-surface-hover: #2a1e33;
+  --color-border: #2a1e33;
+  --color-border-strong: #3a2a47;
+  --color-text: #fdf1e0;
+  --color-muted: #a48ba8;
+  --color-accent: #ff5f9e;
+  --color-accent-hover: #ff7fb0;
+  --color-accent-bg: rgba(255, 95, 158, 0.16);
+  --color-success: #3ec9a7;
+  --color-success-bg: rgba(62, 201, 167, 0.14);
+  --color-warning: #f8a531;
+  --color-warning-bg: rgba(248, 165, 49, 0.14);
+  --color-danger: #e63946;
+  --color-danger-bg: rgba(230, 57, 70, 0.14);
+}
+
+:root[data-theme='winter-day'] {
+  color-scheme: light;
+  --color-base: #f7f9fc;
+  --color-surface: #eef2f8;
+  --color-surface-hover: #e3e9f2;
+  --color-border: #dbe3ee;
+  --color-border-strong: #c2cede;
+  --color-text: #1e2a3a;
+  --color-muted: #5b6b82;
+  --color-accent: #3a7bd5;
+  --color-accent-hover: #2f66b3;
+  --color-accent-bg: #e3edfa;
+  --color-success: #2f9e6e;
+  --color-success-bg: #e1f3ea;
+  --color-warning: #c07a1e;
+  --color-warning-bg: #faf0dc;
+  --color-danger: #c23b4a;
+  --color-danger-bg: #fbe6e8;
+  --card-shadow: none;
+  --card-shadow-hover: none;
+}
+
+body {
+  margin: 0;
+  background: var(--color-base);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+.theme-scroll::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+.theme-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.theme-scroll::-webkit-scrollbar-thumb {
+  /* Invisible at rest — the .is-scrolling class (toggled from JS on scroll,
+     cleared after ~900ms idle) is what actually shows it, so it fades out
+     even while the cursor is still sitting over the list. */
+  background: transparent;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.15s ease;
+}
+.theme-scroll.is-scrolling::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  background-clip: padding-box;
+}
+.theme-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--color-accent);
+  background-clip: padding-box;
+}
+
+@keyframes splash-ripple {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+.splash-ripple {
+  animation: splash-ripple 1.8s ease-out infinite;
+}
