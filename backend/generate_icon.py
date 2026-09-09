@@ -25,10 +25,11 @@ def chevron(draw, cx, cy, half_w, half_h, thickness, color):
 
 img, draw = rounded_square(SIZE, radius=110, color=ACCENT)
 
+# Matches IconLayers (frontend/src/icons.jsx): a diamond and a single
+# chevron below it, not two.
 cx = SIZE / 2
-diamond(draw, cx, SIZE * 0.36, half_w=SIZE * 0.24, half_h=SIZE * 0.13, color=WHITE)
-chevron(draw, cx, SIZE * 0.60, half_w=SIZE * 0.22, half_h=SIZE * 0.09, thickness=int(SIZE * 0.045), color=WHITE)
-chevron(draw, cx, SIZE * 0.74, half_w=SIZE * 0.22, half_h=SIZE * 0.09, thickness=int(SIZE * 0.045), color=WHITE)
+diamond(draw, cx, SIZE * 0.40, half_w=SIZE * 0.26, half_h=SIZE * 0.15, color=WHITE)
+chevron(draw, cx, SIZE * 0.66, half_w=SIZE * 0.24, half_h=SIZE * 0.10, thickness=int(SIZE * 0.05), color=WHITE)
 
 img.save("icon.ico", sizes=[(256, 256), (128, 128), (64, 64), (48, 48), (32, 32), (16, 16)])
 img.save("icon.png")

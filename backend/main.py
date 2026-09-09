@@ -34,6 +34,29 @@ CONFIG_PATH = APP_DATA_DIR / "config.json"
 
 KNOWN_IDES = ["webstorm", "idea1", "pycharm", "code", "rider", "goland", "clion", "phpstorm"]
 
+# Mirrors --color-accent for every theme in frontend/src/index.css, so the
+# taskbar icon can be recolored to match instead of staying a fixed purple
+# regardless of which theme is actually active.
+THEME_ACCENTS = {
+    "dark": "#6e56cf",
+    "light": "#6e56cf",
+    "tokyo-night": "#7aa2f7",
+    "monokai": "#66d9ef",
+    "catppuccin-mocha": "#cba6f7",
+    "dracula": "#bd93f9",
+    "nord": "#88c0d0",
+    "gruvbox-dark": "#fe8019",
+    "tokyo-day": "#2e7de9",
+    "catppuccin-latte": "#8839ef",
+    "atom-one-dark": "#61afef",
+    "atom-one-light": "#4078f2",
+    "halloween": "#ff7518",
+    "diwali": "#f2b705",
+    "movember": "#c17d3a",
+    "dia-de-muertos": "#ff5f9e",
+    "winter-day": "#3a7bd5",
+}
+
 # JetBrains Toolbox keeps a stale "idea" script pointing at an uninstalled version on this
 # machine; "idea1" is the one that actually launches the current IntelliJ IDEA Ultimate.
 STALE_IDE_ALIASES = {"idea": "idea1"}
@@ -1517,18 +1540,6 @@ class Api:
             return []
         return [d for d in tmp.glob("tmp*") if (d / "EBWebView").is_dir()]
 
-    def scan_stale_webview_temp(self):
-        dirs = self._stale_webview_temp_dirs()
-        total = 0
-        for d in dirs:
-            for f in d.rglob("*"):
-                if f.is_file():
-                    try:
-                        total += f.stat().st_size
-                    except OSError:
-                        pass
-        return {"count": len(dirs), "mb": round(total / 1024 / 1024, 1)}
-
     def clean_stale_webview_temp(self):
         removed = 0
         failed = 0
@@ -1677,6 +1688,7 @@ class Api:
         config = load_config()
         config["theme"] = theme or "dark"
         save_config(config)
+        threading.Thread(target=_apply_window_icon, args=(config["theme"],), daemon=True).start()
         return {"ok": True}
 
     def get_ai_settings(self):
@@ -2563,6 +2575,79 @@ def _kill_all_running():
     _running.clear()
 
 
+def _theme_icon_path(hex_color):
+    # Cached per color under APP_DATA_DIR — regenerating a handful of small
+    # PNGs/ICOs on first use per theme is cheap, but there's no reason to
+    # redo it on every switch back to an already-seen theme.
+    icons_dir = APP_DATA_DIR / "icons"
+    icons_dir.mkdir(exist_ok=True)
+    ico_path = icons_dir / f"{hex_color.lstrip('#')}.ico"
+    if ico_path.exists():
+        return ico_path
+
+    from PIL import Image, ImageDraw
+
+    size = 256
+    accent = tuple(int(hex_color.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4)) + (255,)
+    white = (255, 255, 255, 255)
+
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.rounded_rectangle([0, 0, size - 1, size - 1], radius=size // 4.6, fill=accent)
+
+    # Matches IconLayers (frontend/src/icons.jsx) exactly: a diamond and a
+    # single chevron below it — the generated icon used to add a second
+    # chevron the in-app logo doesn't have.
+    cx = size / 2
+    cy = size * 0.40
+    hw, hh = size * 0.26, size * 0.15
+    draw.polygon([(cx, cy - hh), (cx + hw, cy), (cx, cy + hh), (cx - hw, cy)], fill=white)
+
+    thickness = int(size * 0.05)
+    cy = size * 0.66
+    hw, hh = size * 0.24, size * 0.10
+    draw.line([(cx - hw, cy - hh), (cx, cy), (cx + hw, cy - hh)], fill=white, width=thickness, joint="curve")
+
+    img.save(ico_path, sizes=[(256, 256), (64, 64), (32, 32), (16, 16)])
+    return ico_path
+
+
+def _apply_window_icon(theme, retries=1):
+    # pywebview's Windows backend hosts the browser in a .NET WinForms
+    # Form, reachable through its internal instance registry — the same
+    # object pywebview itself sets `.Icon` on once at startup, so this just
+    # does that again later with a different file. Called right at startup,
+    # the native form may not exist yet (create_window only registers the
+    # config — the WinForms message loop that actually builds it starts
+    # inside webview.start()), so a few retries cover that race.
+    try:
+        from webview.platforms.winforms import BrowserView
+        from System import Func, Type
+        from System.Drawing import Icon as NetIcon
+
+        win = webview.windows[0]
+        form = BrowserView.instances.get(win.uid)
+        if not form:
+            if retries > 0:
+                time.sleep(0.5)
+                _apply_window_icon(theme, retries - 1)
+            return
+        ico_path = _theme_icon_path(THEME_ACCENTS.get(theme, THEME_ACCENTS["dark"]))
+
+        # WinForms controls can only be touched from the thread that created
+        # them — this runs from a background thread, so the assignment has
+        # to be marshaled onto the UI thread via Invoke, same as pywebview's
+        # own minimize()/maximize()/close() do internally. Setting .Icon
+        # directly here silently threw (swallowed by the except below) and
+        # never actually changed anything.
+        def _set_icon():
+            form.Icon = NetIcon(str(ico_path))
+
+        form.Invoke(Func[Type](_set_icon))
+    except Exception:
+        pass
+
+
 def main():
     api = Api()
     dev_url = os.environ.get("DEV_HUB_DEV_URL")
@@ -2583,6 +2668,17 @@ def main():
         background_color="#0a0a0c",
     )
     window.events.closing += _kill_all_running
+
+    # Stale WebView2 profile dirs from past launches otherwise only get
+    # cleaned when someone happens to open Processus and click the button —
+    # the current session's own dir is always skipped (still locked), so
+    # there's nothing to lose by doing this unattended on every startup.
+    threading.Thread(target=api.clean_stale_webview_temp, daemon=True).start()
+
+    # Match the taskbar icon to whichever theme was last saved, rather than
+    # leaving it on the default accent until the user happens to switch
+    # themes once in this session.
+    threading.Thread(target=lambda: _apply_window_icon(load_config().get("theme", "dark"), retries=10), daemon=True).start()
 
     # Keep pywebview's default private mode: setting private_mode=False with a
     # storage_path broke the JS API bridge in the frozen build (the window

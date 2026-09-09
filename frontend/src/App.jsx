@@ -3379,65 +3379,6 @@ function OrphanScanner({ onNotify }) {
   )
 }
 
-function CacheCleaner({ onNotify }) {
-  const [open, setOpen] = useState(false)
-  const [scan, setScan] = useState(null)
-  const [scanning, setScanning] = useState(false)
-  const [cleaning, setCleaning] = useState(false)
-
-  async function runScan() {
-    setScanning(true)
-    setScan(await api().scan_stale_webview_temp())
-    setScanning(false)
-  }
-
-  async function clean() {
-    setCleaning(true)
-    const result = await api().clean_stale_webview_temp()
-    setCleaning(false)
-    onNotify(`${result.removed} dossier(s) supprimé(s)${result.failed ? `, ${result.failed} verrouillé(s) ignoré(s)` : ''}`)
-    runScan()
-  }
-
-  return (
-    <div className="relative">
-      <Button
-        variant="ghost"
-        onClick={() => {
-          const next = !open
-          setOpen(next)
-          if (next) runScan()
-        }}
-      >
-        <IconTrash className="h-3.5 w-3.5" />
-        Cache WebView2
-      </Button>
-      {open && (
-        <div className="absolute right-0 top-full z-10 mt-1 w-72 rounded-md border border-border-strong bg-surface p-3 shadow-lg">
-          <div className="mb-2 flex items-center justify-between">
-            <span className="text-xs font-medium text-text">Profils WebView2 orphelins</span>
-            <button onClick={runScan} className="text-muted hover:text-text cursor-pointer" title="Rescanner">
-              <IconRefresh className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          {scanning && <p className="text-xs text-muted">Scan…</p>}
-          {!scanning && scan?.count === 0 && <p className="text-xs text-muted">Rien à nettoyer.</p>}
-          {!scanning && scan && scan.count > 0 && (
-            <div className="flex flex-col gap-2">
-              <p className="text-[11px] text-muted">
-                {scan.count} dossier(s) laissés par d'anciens lancements — {scan.mb} Mo au total. Le profil de la session en cours est ignoré (verrouillé).
-              </p>
-              <Button variant="danger" disabled={cleaning} onClick={clean}>
-                {cleaning ? 'Suppression…' : `Nettoyer (${scan.mb} Mo)`}
-              </Button>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 function ProcessesPanel({
   tabs,
   activeTab,
@@ -3562,7 +3503,6 @@ function ProcessesPanel({
           <h2 className="text-sm font-semibold">Processus</h2>
           <div className="flex items-center gap-2">
             <OrphanScanner onNotify={onNotify} />
-            <CacheCleaner onNotify={onNotify} />
             <ThemePicker mode={themeMode} onChange={onThemeChange} />
             <button onClick={onClose} className="text-muted hover:text-text cursor-pointer">
               <IconClose className="h-4 w-4" />
@@ -3617,7 +3557,6 @@ function ProcessesPanel({
               Tout arrêter ({runningPaths.size})
             </Button>
             <OrphanScanner onNotify={onNotify} />
-            <CacheCleaner onNotify={onNotify} />
             <ThemePicker mode={themeMode} onChange={onThemeChange} />
             <button onClick={onClose} className="text-muted hover:text-text cursor-pointer">
               <IconClose className="h-4 w-4" />
