@@ -148,7 +148,7 @@ function GroupSelect({ groups, onPick, label = 'Ajouter à…' }) {
           e.stopPropagation()
           setOpen((v) => !v)
         }}
-        className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:text-text hover:border-border-strong cursor-pointer"
+        className="inline-flex items-center gap-1 rounded-md border border-accent/40 px-2 py-1 text-[11px] text-accent hover:bg-accent/10 cursor-pointer"
       >
         <IconLayers className="h-3 w-3" />
         {label}
@@ -337,7 +337,7 @@ function GroupSection({ title, count, children, columns = 1, selectAll }) {
       {open && (
         <div
           className={`gap-1 rounded-lg border border-border bg-surface p-1.5 ${
-            columns > 1 ? 'grid grid-cols-2' : 'flex flex-col'
+            columns > 1 ? 'grid grid-cols-[repeat(auto-fit,minmax(280px,1fr))]' : 'flex flex-col'
           }`}
         >
           {children}
@@ -3354,7 +3354,7 @@ function StatRow({ stat, history }) {
   const memLabel = stat.memory_mb >= 1024 ? `${(stat.memory_mb / 1024).toFixed(2)} Go` : `${stat.memory_mb.toFixed(0)} Mo`
 
   return (
-    <div className="flex items-center gap-3 rounded-md bg-base px-2.5 py-2">
+    <div className="flex min-w-0 items-center gap-3 overflow-hidden rounded-md bg-base px-2.5 py-2">
       <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
         <IconFolder className="h-3.5 w-3.5" />
       </span>

@@ -11,6 +11,9 @@ backend/dist/
 frontend/node_modules/
 frontend/dist/
 
+# Local release helper (uses this machine's paths/gh auth)
+release.sh
+
 # Editor / OS
 .idea/
 .vscode/

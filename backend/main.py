@@ -34,7 +34,7 @@ APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DevHub"
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = APP_DATA_DIR / "config.json"
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.1"
 GITHUB_REPO = "salifbiaye/dev-hub"
 
 KNOWN_IDES = ["webstorm", "idea1", "pycharm", "code", "rider", "goland", "clion", "phpstorm"]
