@@ -610,8 +610,13 @@
   --card-shadow-hover: none;
 }
 
+html,
 body {
   margin: 0;
+  overflow-x: hidden;
+}
+
+body {
   background: var(--color-base);
   color: var(--color-text);
   font-family: var(--font-sans);

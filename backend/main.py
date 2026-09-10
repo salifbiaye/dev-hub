@@ -34,7 +34,7 @@ APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DevHub"
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = APP_DATA_DIR / "config.json"
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.2"
 GITHUB_REPO = "salifbiaye/dev-hub"
 
 KNOWN_IDES = ["webstorm", "idea1", "pycharm", "code", "rider", "goland", "clion", "phpstorm"]
@@ -1318,11 +1318,46 @@ class Api:
 
         return {"results": results}
 
-    def branches(self, path):
+    def branches(self, path, fetch=False):
+        # Fetching hits the network and can take seconds, so it's opt-in
+        # (the "Rafraîchir" button) rather than run on every tab load —
+        # otherwise just switching tabs and back felt like it hung.
+        if fetch:
+            run_git(path, "fetch", "--quiet")
+
         out, err, code = run_git(path, "branch", "--all", "--format=%(refname:short)")
         if code != 0:
             return {"error": err}
-        return [b for b in out.splitlines() if b]
+        names = [b for b in out.splitlines() if b]
+
+        # origin/main is the real shared source of truth — prefer it over
+        # the local main, which can lag behind if this branch hasn't been
+        # checked out and pulled in a while.
+        base = None
+        for candidate in ("origin/main", "origin/master", "main", "master"):
+            if candidate in names:
+                base = candidate
+                break
+
+        branches = []
+        for name in names:
+            entry = {"name": name}
+            if base and name != base:
+                out2, _, code2 = run_git(path, "rev-list", "--left-right", "--count", f"{base}...{name}")
+                parts = out2.split() if code2 == 0 else []
+                if len(parts) == 2:
+                    entry["behind_base"] = int(parts[0])
+                    entry["ahead_base"] = int(parts[1])
+            # Same ahead/behind count vs main doesn't mean same commits —
+            # two branches can each be "+3" with entirely different work.
+            # The tip commit's hash + subject makes that visible at a glance.
+            out3, _, code3 = run_git(path, "log", "-1", "--format=%h\x1f%s", name)
+            if code3 == 0 and out3:
+                sha, _, subject = out3.partition("\x1f")
+                entry["last_commit"] = {"sha": sha, "subject": subject}
+            branches.append(entry)
+
+        return {"branches": branches, "base": base}
 
     def switch_branch(self, path, branch):
         out, err, code = run_git(path, "switch", branch)

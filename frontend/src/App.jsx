@@ -2943,6 +2943,7 @@ function ConflictPanel({ path, conflicted, onOpenIde, onNotify, onRefresh }) {
 function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopRun, onClearRun, onBack, onRefreshList, onNotify }) {
   const [status, setStatus] = useState(repo.status)
   const [branches, setBranches] = useState([])
+  const [branchBase, setBranchBase] = useState(null)
   const [loadingBranches, setLoadingBranches] = useState(true)
   const [busy, setBusy] = useState(false)
   const [launching, setLaunching] = useState(false)
@@ -2974,14 +2975,15 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
     setGenerating(false)
   }
 
-  const loadAll = useCallback(async () => {
+  const loadAll = useCallback(async (forceFetch = false) => {
     setLoadingBranches(true)
-    const [freshStatus, branchList] = await Promise.all([
+    const [freshStatus, branchResult] = await Promise.all([
       api().git_status(repo.path),
-      api().branches(repo.path),
+      api().branches(repo.path, forceFetch),
     ])
     setStatus(freshStatus)
-    setBranches(Array.isArray(branchList) ? branchList : [])
+    setBranches(Array.isArray(branchResult?.branches) ? branchResult.branches : [])
+    setBranchBase(branchResult?.base || null)
     setLoadingBranches(false)
     onRefreshList()
   }, [repo.path, onRefreshList])
@@ -3017,7 +3019,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
             <p className="truncate font-mono text-xs text-muted">{repo.path}</p>
           </div>
         </div>
-        <Button variant="subtle" onClick={loadAll} title="Recharger l'état git (utile si modifié hors de Dev Hub)">
+        <Button variant="subtle" onClick={() => loadAll(true)} title="Recharger l'état git (utile si modifié hors de Dev Hub)">
           <IconRefresh className="h-3.5 w-3.5" />
           Rafraîchir
         </Button>
@@ -3190,18 +3192,63 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
           used to unmount the inactive ones, wiping their internal state
           (e.g. which AI session was open, DB filters/insert row in progress). */}
       <div className={activeTab === 'branches' ? '' : 'hidden'}>
-        {loadingBranches && <p className="text-xs text-muted">Chargement…</p>}
+        {loadingBranches ? (
+          <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-1.5">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="flex animate-pulse items-center justify-between rounded-md px-3 py-2">
+                <div className="h-3 w-32 rounded bg-surface-hover" style={{ animationDelay: `${i * 100}ms` }} />
+                <div className="h-5 w-16 rounded bg-surface-hover" style={{ animationDelay: `${i * 100}ms` }} />
+              </div>
+            ))}
+          </div>
+        ) : (
         <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-1.5">
-          {branches.map((branch) => {
+          {branches.map((b) => {
+            const branch = b.name
             const isCurrent = branch === status?.branch
+            const isBase = branch === branchBase
+            const hasCompare = !isBase && branchBase && (b.ahead_base > 0 || b.behind_base > 0)
             return (
               <div
                 key={branch}
-                className={`flex items-center justify-between rounded-md px-3 py-2 text-xs ${
+                className={`flex items-center justify-between gap-3 rounded-md px-3 py-2 text-xs ${
                   isCurrent ? 'bg-accent-bg text-accent' : 'text-muted hover:bg-surface-hover'
                 }`}
               >
-                <span className="truncate font-mono">{branch}</span>
+                <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate font-mono">{branch}</span>
+                  {isBase && (
+                    <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted">
+                      base
+                    </span>
+                  )}
+                  {hasCompare && (
+                    <span
+                      className="flex shrink-0 items-center gap-1 font-mono text-[10.5px]"
+                      title={`Par rapport à ${branchBase} : ${b.ahead_base} commit(s) en avance, ${b.behind_base} en retard`}
+                    >
+                      {b.ahead_base > 0 && (
+                        <span className="flex items-center gap-0.5 rounded-full bg-success-bg px-1.5 py-0.5 text-success">
+                          <IconArrowUp className="h-2.5 w-2.5" />
+                          {b.ahead_base}
+                        </span>
+                      )}
+                      {b.behind_base > 0 && (
+                        <span className="flex items-center gap-0.5 rounded-full bg-warning-bg px-1.5 py-0.5 text-warning">
+                          <IconArrowDown className="h-2.5 w-2.5" />
+                          {b.behind_base}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </div>
+                {b.last_commit && (
+                  <p className="mt-0.5 truncate font-mono text-[10px] text-muted/70">
+                    <span className="text-muted">{b.last_commit.sha}</span> {b.last_commit.subject}
+                  </p>
+                )}
+                </div>
                 {!isCurrent && (
                   <div className="flex shrink-0 gap-1.5">
                     <button
@@ -3225,6 +3272,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
             )
           })}
         </div>
+        )}
       </div>
 
       {visitedTabs.has('history') && (
