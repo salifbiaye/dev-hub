@@ -138,7 +138,7 @@ function StatusBadges({ status }) {
   )
 }
 
-function GroupSelect({ groups, onPick }) {
+function GroupSelect({ groups, onPick, label = 'Ajouter à…' }) {
   const [open, setOpen] = useState(false)
   if (groups.length === 0) return null
   return (
@@ -151,7 +151,7 @@ function GroupSelect({ groups, onPick }) {
         className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted hover:text-text hover:border-border-strong cursor-pointer"
       >
         <IconLayers className="h-3 w-3" />
-        Ajouter à…
+        {label}
       </button>
       {open && (
         <div
@@ -308,18 +308,32 @@ function EmptyState({ message, className, size = 'md' }) {
   )
 }
 
-function GroupSection({ title, count, children, columns = 1 }) {
+function GroupSection({ title, count, children, columns = 1, selectAll }) {
   const [open, setOpen] = useState(true)
   return (
     <div>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full cursor-pointer items-center gap-1.5 px-1 py-1.5 text-left text-[11px] font-medium text-muted hover:text-text"
-      >
-        <IconChevronDown className={`h-3 w-3 shrink-0 transition-transform duration-150 ${open ? '' : '-rotate-90'}`} />
-        {title}
-        <span className="text-[10px] font-normal text-muted/70">· {count}</span>
-      </button>
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex flex-1 cursor-pointer items-center gap-1.5 px-1 py-1.5 text-left text-[11px] font-medium text-muted hover:text-text"
+        >
+          <IconChevronDown className={`h-3 w-3 shrink-0 transition-transform duration-150 ${open ? '' : '-rotate-90'}`} />
+          {title}
+          <span className="text-[10px] font-normal text-muted/70">· {count}</span>
+        </button>
+        {selectAll && (
+          <label className="flex cursor-pointer items-center gap-1.5 px-1 text-[11px] text-muted hover:text-text">
+            <input
+              type="checkbox"
+              checked={selectAll.checked}
+              ref={(el) => el && (el.indeterminate = selectAll.indeterminate)}
+              onChange={(e) => selectAll.onChange(e.target.checked)}
+              className="h-3 w-3 cursor-pointer"
+            />
+            Tout sélectionner
+          </label>
+        )}
+      </div>
       {open && (
         <div
           className={`gap-1 rounded-lg border border-border bg-surface p-1.5 ${
@@ -333,14 +347,23 @@ function GroupSection({ title, count, children, columns = 1 }) {
   )
 }
 
-function ProjectRow({ repo, isRunning, onOpen, onStop, onStart, terminals, onNotify, grouped, groups, onAddToGroup, onRemove }) {
+function ProjectRow({ repo, isRunning, onOpen, onStop, onStart, terminals, onNotify, grouped, groups, onAddToGroup, onRemove, selected, onToggleSelect }) {
   const defaultRun = (repo.runs || []).find((r) => r.default) || (repo.runs || [])[0]
+  const status = repo.status
 
   return (
     <div
       onClick={() => onOpen(repo)}
       className="group flex cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 text-left hover:bg-surface-hover"
     >
+      <input
+        type="checkbox"
+        checked={!!selected}
+        onClick={(e) => e.stopPropagation()}
+        onChange={() => onToggleSelect(repo.path)}
+        title="Sélectionner"
+        className="h-3.5 w-3.5 shrink-0 cursor-pointer"
+      />
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isRunning ? 'bg-success' : 'bg-border-strong'}`} />
       <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
         <IconFolder className="h-3.5 w-3.5" />
@@ -351,6 +374,24 @@ function ProjectRow({ repo, isRunning, onOpen, onStop, onStart, terminals, onNot
           <span className="ml-2 font-mono text-[10.5px] text-muted">{defaultRun.name}</span>
         )}
       </div>
+      {status && !status.error && (
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="flex items-center gap-1 font-mono text-[11px] text-muted" title="Branche actuelle">
+            <IconBranch className="h-3 w-3" />
+            {status.branch || '?'}
+          </span>
+          {status.dirty > 0 && (
+            <span className="rounded-full bg-warning-bg px-1.5 py-0.5 text-[10px] text-warning" title={`${status.dirty} fichier(s) modifié(s)`}>
+              {status.dirty} modif.
+            </span>
+          )}
+          {status.untracked > 0 && (
+            <span className="rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px] text-muted" title={`${status.untracked} fichier(s) non suivi(s), à ajouter`}>
+              +{status.untracked}
+            </span>
+          )}
+        </div>
+      )}
       <div
         className="flex shrink-0 items-center gap-3 text-muted opacity-0 transition-opacity group-hover:opacity-100"
         onClick={(e) => e.stopPropagation()}
@@ -365,7 +406,11 @@ function ProjectRow({ repo, isRunning, onOpen, onStop, onStart, terminals, onNot
             {isRunning ? <IconClose className="h-3.5 w-3.5" /> : <IconPlay className="h-3.5 w-3.5" />}
           </button>
         )}
-        {!grouped && <GroupSelect groups={groups} onPick={(name) => onAddToGroup(name, repo.path)} />}
+        <GroupSelect
+          groups={groups}
+          onPick={(name) => onAddToGroup(name, repo.path)}
+          label={grouped ? 'Déplacer vers…' : 'Ajouter à…'}
+        />
         <button onClick={() => onRemove(repo.path)} className="cursor-pointer hover:text-danger" title="Retirer de la liste">
           <IconTrash className="h-3.5 w-3.5" />
         </button>
@@ -376,7 +421,8 @@ function ProjectRow({ repo, isRunning, onOpen, onStop, onStart, terminals, onNot
 
 function GroupMemberRow({ repo, selected, onToggleSelect, isRunning, runningCount, onOpen, onStart, onStop, onRemoveFromGroup, terminals, onNotify }) {
   const defaultRun = (repo.runs || []).find((r) => r.default) || (repo.runs || [])[0]
-  const branch = repo.status?.branch
+  const status = repo.status
+  const branch = status?.branch
 
   return (
     <div onClick={() => onOpen(repo)} className="group flex cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 hover:bg-surface-hover">
@@ -396,6 +442,16 @@ function GroupMemberRow({ repo, selected, onToggleSelect, isRunning, runningCoun
         <span className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted">
           <IconBranch className="h-3 w-3" />
           {branch}
+        </span>
+      )}
+      {status?.dirty > 0 && (
+        <span className="shrink-0 rounded-full bg-warning-bg px-1.5 py-0.5 text-[10px] text-warning" title={`${status.dirty} fichier(s) modifié(s)`}>
+          {status.dirty} modif.
+        </span>
+      )}
+      {status?.untracked > 0 && (
+        <span className="shrink-0 rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px] text-muted" title={`${status.untracked} fichier(s) non suivi(s), à ajouter`}>
+          +{status.untracked}
         </span>
       )}
       {defaultRun && <span className="shrink-0 font-mono text-[10.5px] text-muted">{defaultRun.name}</span>}
@@ -935,7 +991,7 @@ function readTerminalThemeColors() {
   }
 }
 
-function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDetected, className, closeOnUnmount }) {
+function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDetected, className, closeOnUnmount, colorize = true }) {
   const containerRef = useRef(null)
   const idRef = useRef(terminalId || null)
   const termRef = useRef(null)
@@ -950,7 +1006,11 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
 
   useEffect(() => {
     const term = new Terminal({
-      convertEol: true,
+      // convertEol rewrites bare \n into \r\n — harmless for plain build
+      // logs, but a real interactive CLI session (Claude Code, Codex) does
+      // its own cursor/line handling for a full TUI, and forcing this on
+      // top of that causes misaligned redraws.
+      convertEol: colorize,
       fontFamily: "'JetBrains Mono', ui-monospace, monospace",
       fontSize: 12,
       theme: readTerminalThemeColors(),
@@ -999,7 +1059,13 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
       let queued = []
 
       function writeChunk(data) {
-        term.write(colorizeChunk(data))
+        // Splitting a chunk on '\n' to colorize line-by-line (then
+        // rejoining) is fine for plain build-tool logs, but a real PTY CLI
+        // session already emits its own real ANSI for a full TUI — an
+        // escape sequence spanning two PTY chunks gets torn apart by that
+        // split, desyncing xterm's parser and silently killing color for
+        // the rest of the session. Only run it where it's actually needed.
+        term.write(colorize ? colorizeChunk(data) : data)
         if (onUrlDetected) {
           const found = extractServerUrl(data)
           if (found) onUrlDetected(found)
@@ -1151,17 +1217,33 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
 
 function EmbeddedTerminal({ repo, sessionId, onNotify, onBack }) {
   const startFn = useRef(() => api().start_terminal(repo.path, sessionId)).current
+  const [fullscreen, setFullscreen] = useState(false)
 
   return (
-    <div className="flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border border-border">
+    <div
+      className={
+        fullscreen
+          ? 'fixed inset-0 z-50 flex flex-col overflow-hidden bg-base'
+          : 'flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border border-border'
+      }
+    >
       <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-2">
         <Button variant="subtle" onClick={onBack} className="px-2">
           <IconChevronLeft className="h-4 w-4" />
           Retour
         </Button>
-        <span className="text-xs text-muted">{repo.name}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-muted">{repo.name}</span>
+          <button
+            onClick={() => setFullscreen((v) => !v)}
+            className="text-muted hover:text-text cursor-pointer"
+            title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+          >
+            <IconMaximize className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
-      <PtyTerminal startFn={startFn} onNotify={onNotify} closeOnUnmount />
+      <PtyTerminal startFn={startFn} onNotify={onNotify} closeOnUnmount colorize={false} />
     </div>
   )
 }
@@ -3080,7 +3162,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
         </div>
       )}
 
-      <div className="flex items-center gap-1 border-b border-border">
+      <div className="theme-scroll flex items-center gap-1 overflow-x-auto border-b border-border">
         {[
           { id: 'branches', label: 'Branches' },
           { id: 'history', label: 'Historique' },
@@ -3093,7 +3175,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`cursor-pointer border-b-2 px-3 py-2 text-[13px] font-medium transition-colors duration-150 ${
+            className={`shrink-0 cursor-pointer border-b-2 px-3 py-2 text-[13px] font-medium transition-colors duration-150 ${
               activeTab === tab.id
                 ? 'border-accent text-text'
                 : 'border-transparent text-muted hover:text-text'
@@ -4319,6 +4401,7 @@ function ThemeSwatch({ theme, className }) {
 
 function ThemePicker({ mode, onChange }) {
   const [open, setOpen] = useState(false)
+  const [coords, setCoords] = useState(null)
   const ref = useRef(null)
   const listScroll = useAutoHideScroll()
   const current = THEMES.find((t) => t.id === mode) || THEMES[0]
@@ -4331,14 +4414,31 @@ function ThemePicker({ mode, onChange }) {
     return () => document.removeEventListener('mousedown', onDocClick)
   }, [])
 
+  // Fixed (not absolute) positioning, computed from the trigger's own
+  // rect: the header needs horizontal scroll for when its buttons overflow
+  // at high zoom, but any overflow:auto ancestor also clips absolutely
+  // positioned children that spill past its box — this panel used to get
+  // cut off mid-render. `fixed` escapes that entirely since it's relative
+  // to the viewport, not the scrolling ancestor.
+  function toggleOpen() {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect()
+      setCoords({ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) })
+    }
+    setOpen((v) => !v)
+  }
+
   return (
     <div ref={ref} className="relative">
-      <Button variant="subtle" onClick={() => setOpen((v) => !v)} title="Thème">
+      <Button variant="subtle" onClick={toggleOpen} title="Thème">
         <IconPalette className="h-3.5 w-3.5" />
         Thème
       </Button>
-      {open && (
-        <div className="absolute right-0 top-full z-40 mt-1.5 w-96 overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl">
+      {open && coords && (
+        <div
+          style={{ position: 'fixed', top: coords.top, right: coords.right }}
+          className="z-40 w-96 overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl"
+        >
           <p className="border-b border-border px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted">
             Thèmes
           </p>
@@ -4490,6 +4590,7 @@ export default function App() {
   const [ides, setIdes] = useState([])
   const [terminals, setTerminals] = useState(['cmd', 'powershell'])
   const [ready, setReady] = useState(false)
+  const [refreshing, setRefreshing] = useState(false)
   const [toasts, setToasts] = useState([])
   const [logs, setLogs] = useState([])
   const [logsOpen, setLogsOpen] = useState(false)
@@ -4497,6 +4598,16 @@ export default function App() {
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [appFullscreen, setAppFullscreen] = useState(false)
+  const [updateInfo, setUpdateInfo] = useState(null)
+
+  useEffect(() => {
+    if (!ready) return
+    api()
+      ?.check_for_update()
+      ?.then((r) => {
+        if (r?.update_available) setUpdateInfo(r)
+      })
+  }, [ready])
 
   useEffect(() => {
     // Pushed from Python right after the native F11 toggle — OS fullscreen
@@ -4592,6 +4703,48 @@ export default function App() {
   const [groupSearch, setGroupSearch] = useState('')
   const [repoSearch, setRepoSearch] = useState('')
   const [repoGroupFilter, setRepoGroupFilter] = useState('all')
+  const [repoSelection, setRepoSelection] = useState(() => new Set())
+
+  function toggleRepoSelection(path) {
+    setRepoSelection((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  // Adding one-by-one via each row is fine for a couple of projects, but
+  // scanning a folder can drop 50 repos in at once — looping the same
+  // add_repo_to_group call the row button uses, just without a refresh
+  // per iteration, turns that into a single bulk action instead.
+  async function addSelectedToGroup(groupName) {
+    const paths = [...repoSelection]
+    for (const path of paths) {
+      await api().add_repo_to_group(groupName, path)
+    }
+    notify(`${paths.length} projet(s) ajouté(s) à "${groupName}"`)
+    setRepoSelection(new Set())
+    refresh()
+  }
+
+  function removeSelectedRepos() {
+    const paths = [...repoSelection]
+    setConfirmDialog({
+      title: `Retirer ${paths.length} projet(s) ?`,
+      message: `Ces projets seront retirés de Dev Hub. Les fichiers ne seront pas supprimés du disque.`,
+      confirmLabel: 'Retirer',
+      onConfirm: async () => {
+        for (const path of paths) {
+          await api().remove_repo(path)
+        }
+        notify(`${paths.length} projet(s) retiré(s)`)
+        setRepoSelection(new Set())
+        refresh()
+        setConfirmDialog(null)
+      },
+    })
+  }
   const [runningPaths, setRunningPaths] = useState(() => new Set())
   const [runningMeta, setRunningMeta] = useState({})
   const [processesOpen, setProcessesOpen] = useState(false)
@@ -4694,6 +4847,17 @@ export default function App() {
     const list = await api()?.group_repos(name)
     setGroupRepos(Array.isArray(list) ? list : [])
   }, [])
+
+  // Must stay referentially stable — RepoDetail's loadAll() is memoized on
+  // this callback's identity, and calls it at the end of every load. A
+  // fresh inline function here would give loadAll a new identity every App
+  // render, re-triggering its own effect, which calls loadAll again —
+  // an infinite refresh loop that showed up as the branches list
+  // flickering "Chargement..." nonstop.
+  const refreshRepoAndGroupList = useCallback(() => {
+    refresh()
+    if (selectedGroup) refreshGroupRepos(selectedGroup)
+  }, [refresh, refreshGroupRepos, selectedGroup])
 
   useEffect(() => {
     function init() {
@@ -4979,7 +5143,7 @@ export default function App() {
       {!appFullscreen && <TitleBar />}
       <SplashScreen ready={ready} />
       {!appFullscreen && (
-      <header className="flex items-center justify-between gap-4 border-b border-border px-6 py-4">
+      <header className="flex items-center justify-between gap-4 overflow-x-auto border-b border-border px-6 py-4">
         <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-white">
             <IconLayers className="h-4 w-4" />
@@ -5025,8 +5189,19 @@ export default function App() {
           </Button>
           {showList && (
             <>
-              <Button variant="subtle" onClick={refresh} className="px-2" title="Rafraîchir">
-                <IconRefresh className="h-3.5 w-3.5" />
+              <Button
+                variant="subtle"
+                disabled={refreshing}
+                onClick={async () => {
+                  setRefreshing(true)
+                  const minDelay = new Promise((r) => setTimeout(r, 400))
+                  await Promise.all([refresh(), minDelay])
+                  setRefreshing(false)
+                }}
+                className="px-2"
+                title="Rafraîchir"
+              >
+                <IconRefresh className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
               </Button>
               <Button variant="ghost" onClick={scanFolder} title="Scanner un dossier" className="px-2">
                 <IconScan className="h-3.5 w-3.5" />
@@ -5102,6 +5277,28 @@ export default function App() {
               Tuer tous
             </Button>
             <button onClick={() => setOrphanAlert(null)} className="text-danger hover:opacity-70 cursor-pointer">
+              <IconClose className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {updateInfo && (
+        <div className="mx-6 mt-4 flex items-center justify-between rounded-lg bg-accent-bg px-3 py-2 text-xs text-accent">
+          <span>
+            Nouvelle version disponible : {updateInfo.latest_version} (actuelle : {updateInfo.current_version})
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              onClick={async () => {
+                const r = await api().open_external(updateInfo.url)
+                if (!r?.ok) notify(`Échec de l'ouverture : ${r?.error}`, true)
+              }}
+            >
+              Télécharger
+            </Button>
+            <button onClick={() => setUpdateInfo(null)} className="text-accent hover:opacity-70 cursor-pointer">
               <IconClose className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -5196,7 +5393,49 @@ export default function App() {
                       ...groups.map((g) => ({ value: g.name, label: g.name })),
                     ]}
                   />
+                  <label className="flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted hover:text-text">
+                    <input
+                      type="checkbox"
+                      checked={filteredRepos.length > 0 && filteredRepos.every((r) => repoSelection.has(r.path))}
+                      ref={(el) => {
+                        if (!el) return
+                        const selectedCount = filteredRepos.filter((r) => repoSelection.has(r.path)).length
+                        el.indeterminate = selectedCount > 0 && selectedCount < filteredRepos.length
+                      }}
+                      onChange={(e) => {
+                        setRepoSelection((prev) => {
+                          const next = new Set(prev)
+                          for (const r of filteredRepos) {
+                            if (e.target.checked) next.add(r.path)
+                            else next.delete(r.path)
+                          }
+                          return next
+                        })
+                      }}
+                      className="h-3.5 w-3.5 cursor-pointer"
+                    />
+                    Tout sélectionner
+                  </label>
                 </div>
+                {repoSelection.size > 0 && (
+                  <div className="mb-3 flex items-center gap-3 rounded-md border border-accent/30 bg-accent-bg px-3 py-2">
+                    <span className="text-[12px] text-accent">{repoSelection.size} sélectionné(s)</span>
+                    <GroupSelect groups={groups} onPick={addSelectedToGroup} />
+                    <button
+                      onClick={removeSelectedRepos}
+                      className="inline-flex items-center gap-1 rounded-md border border-danger/40 px-2 py-1 text-[11px] text-danger hover:bg-danger-bg cursor-pointer"
+                    >
+                      <IconTrash className="h-3 w-3" />
+                      Retirer
+                    </button>
+                    <button
+                      onClick={() => setRepoSelection(new Set())}
+                      className="ml-auto text-[12px] text-muted hover:text-text cursor-pointer"
+                    >
+                      Désélectionner
+                    </button>
+                  </div>
+                )}
                 {repos.length === 0 ? (
                   <EmptyState message='Aucun projet pour l&apos;instant — clique sur "Ajouter un projet".' />
                 ) : filteredRepos.length === 0 ? (
@@ -5210,8 +5449,29 @@ export default function App() {
                         ;(byGroup[key] ||= []).push(repo)
                       }
                       const orderedKeys = [...groups.map((g) => g.name), UNGROUPED_KEY].filter((k) => byGroup[k])
-                      return orderedKeys.map((key) => (
-                        <GroupSection key={key} title={key === UNGROUPED_KEY ? 'Sans groupe' : key} count={byGroup[key].length}>
+                      return orderedKeys.map((key) => {
+                        const sectionPaths = byGroup[key].map((r) => r.path)
+                        const selectedInSection = sectionPaths.filter((p) => repoSelection.has(p)).length
+                        return (
+                        <GroupSection
+                          key={key}
+                          title={key === UNGROUPED_KEY ? 'Sans groupe' : key}
+                          count={byGroup[key].length}
+                          selectAll={{
+                            checked: selectedInSection === sectionPaths.length,
+                            indeterminate: selectedInSection > 0 && selectedInSection < sectionPaths.length,
+                            onChange: (checked) => {
+                              setRepoSelection((prev) => {
+                                const next = new Set(prev)
+                                for (const p of sectionPaths) {
+                                  if (checked) next.add(p)
+                                  else next.delete(p)
+                                }
+                                return next
+                              })
+                            },
+                          }}
+                        >
                           {byGroup[key].map((repo) => (
                             <ProjectRow
                               key={repo.path}
@@ -5223,13 +5483,16 @@ export default function App() {
                               terminals={terminals}
                               onNotify={notify}
                               grouped={key !== UNGROUPED_KEY}
-                              groups={groups}
+                              groups={groups.filter((g) => g.name !== key)}
                               onAddToGroup={addToGroup}
                               onRemove={removeRepo}
+                              selected={repoSelection.has(repo.path)}
+                              onToggleSelect={toggleRepoSelection}
                             />
                           ))}
                         </GroupSection>
-                      ))
+                        )
+                      })
                     })()}
                   </div>
                 )}
@@ -5331,7 +5594,7 @@ export default function App() {
             onStopRun={stopRun}
             onClearRun={clearRunEntry}
             onBack={() => setSelectedPath(null)}
-            onRefreshList={refresh}
+            onRefreshList={refreshRepoAndGroupList}
             onNotify={notify}
           />
         )}

@@ -34,6 +34,9 @@ APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DevHub"
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = APP_DATA_DIR / "config.json"
 
+APP_VERSION = "0.2.0"
+GITHUB_REPO = "salifbiaye/dev-hub"
+
 KNOWN_IDES = ["webstorm", "idea1", "pycharm", "code", "rider", "goland", "clion", "phpstorm"]
 
 # Mirrors --color-accent for every theme in frontend/src/index.css, so the
@@ -983,6 +986,14 @@ class Api:
         group = next((g for g in config["groups"] if g["name"] == name), None)
         if not group:
             return {"error": "Groupe introuvable"}
+        # A project belongs to one group at a time — joining a new one
+        # reassigns it instead of piling up memberships, since the rest of
+        # the UI (Projets sections, group badges, Stats) only ever shows a
+        # single group per project and would silently hide it from any
+        # group beyond the first otherwise.
+        for g in config["groups"]:
+            if g is not group and path in g["repos"]:
+                g["repos"].remove(path)
         if path not in group["repos"]:
             group["repos"].append(path)
         save_config(config)
@@ -1764,6 +1775,31 @@ class Api:
     def get_config_path(self):
         return {"path": str(CONFIG_PATH)}
 
+    def check_for_update(self):
+        # Windows can't let a running .exe overwrite itself, so this only
+        # ever surfaces a notification + a link to the release — the user
+        # downloads and replaces it themselves, no auto-download/relaunch.
+        try:
+            data = _get_json(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "DevHub"},
+            )
+            latest_tag = data.get("tag_name", "")
+            if not latest_tag:
+                return {"update_available": False}
+            latest = _parse_semver(latest_tag)
+            current = _parse_semver(APP_VERSION)
+            return {
+                "update_available": latest > current,
+                "current_version": APP_VERSION,
+                "latest_version": latest_tag,
+                "url": data.get("html_url") or f"https://github.com/{GITHUB_REPO}/releases/latest",
+            }
+        except Exception:
+            # No internet, no releases published yet, rate-limited, etc. —
+            # never let this interrupt normal startup.
+            return {"update_available": False}
+
     def get_theme(self):
         return {"theme": load_config().get("theme", "dark")}
 
@@ -1947,8 +1983,19 @@ class Api:
         if session_id:
             argv += ["--resume", session_id]
 
+        # DevHub.exe is a frozen GUI app with no console, so it inherits no
+        # TERM/color env vars at all — CLIs that auto-detect color support
+        # (chalk, supports-color, etc.) see that absence and quietly
+        # disable their own theming for anything not hardcoded, which is
+        # why only the static banner stayed colored and everything else
+        # went plain. Forcing these makes the CLI trust it has full color.
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        env["FORCE_COLOR"] = "1"
+
         try:
-            proc = winpty.PtyProcess.spawn(argv, cwd=path, dimensions=(24, 80))
+            proc = winpty.PtyProcess.spawn(argv, cwd=path, env=env, dimensions=(24, 80))
         except Exception as e:
             return {"error": str(e)}
 
@@ -2555,6 +2602,25 @@ def _claude_project_dir(path):
     normalized = str(Path(path).resolve())
     encoded = re.sub(r"[\\/:]", "-", normalized)
     return Path.home() / ".claude" / "projects" / encoded
+
+
+def _get_json(url, headers=None, timeout=10):
+    req = urllib.request.Request(url, headers=headers or {}, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _parse_semver(tag):
+    # Tags are typically "v1.2.3" — strip the leading "v" and pad to 3 parts
+    # so "1.2" compares sanely against "1.2.0".
+    parts = tag.lstrip("vV").split(".")
+    nums = []
+    for p in parts[:3]:
+        digits = "".join(c for c in p if c.isdigit())
+        nums.append(int(digits) if digits else 0)
+    while len(nums) < 3:
+        nums.append(0)
+    return tuple(nums)
 
 
 def _post_json(url, headers, payload, timeout=30):
