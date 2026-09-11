@@ -30,11 +30,21 @@ import win32con
 import win32gui
 import win32process
 
+# WebView2 inherits the system/VPN proxy by default, which often has no
+# localhost bypass — that routes the preview iframe's 127.0.0.1/localhost
+# dev-server requests through a proxy that obviously can't reach them
+# ("localhost refused to connect"), even though a real browser (with its
+# own separate proxy handling) still connects fine to the same URL. This
+# forces WebView2's underlying Chromium to always bypass the proxy for
+# loopback addresses. Must be set before webview.start() creates the
+# WebView2 environment, so it's done at import time here.
+os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--proxy-bypass-list=localhost;127.0.0.1;<local>")
+
 APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DevHub"
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = APP_DATA_DIR / "config.json"
 
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.3"
 GITHUB_REPO = "salifbiaye/dev-hub"
 
 KNOWN_IDES = ["webstorm", "idea1", "pycharm", "code", "rider", "goland", "clion", "phpstorm"]
@@ -72,6 +82,9 @@ THEME_ACCENTS = {
     "crimson-black": "#ff3355",
     "emerald-black": "#10b981",
     "amber-black": "#f5a623",
+    "github-dark": "#58a6ff",
+    "github-light": "#0969da",
+    "webstorm": "#3574f0",
 }
 
 # JetBrains Toolbox keeps a stale "idea" script pointing at an uninstalled version on this
@@ -883,6 +896,22 @@ def _safe_repo_file(path, file):
     return repo_path in target.parents
 
 
+def _has_conflict_markers(path, file):
+    # Marking a file "resolved" just stages whatever's currently on disk —
+    # without this check, clicking it before actually editing the file
+    # would silently commit the literal <<<<<<< / ======= / >>>>>>> lines
+    # git left behind.
+    file_path = Path(path) / file
+    if not file_path.exists():
+        return False
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    lines = text.splitlines()
+    return any(l.startswith("<<<<<<< ") for l in lines) and any(l.startswith(">>>>>>> ") for l in lines)
+
+
 class Api:
     def list_repos(self):
         config = load_config()
@@ -1069,6 +1098,8 @@ class Api:
     def mark_resolved(self, path, file):
         if not _safe_repo_file(path, file):
             return {"error": "Chemin de fichier invalide"}
+        if _has_conflict_markers(path, file):
+            return {"error": f"{file} contient encore des marqueurs de conflit (<<<<<<<) — résous-le avant de le marquer résolu."}
         out, err, code = run_git(path, "add", "--", file)
         if code != 0:
             return {"error": err or out}
@@ -1092,6 +1123,9 @@ class Api:
     def save_conflict_resolution(self, path, file, content):
         if not _safe_repo_file(path, file):
             return {"error": "Chemin de fichier invalide"}
+        lines = content.splitlines()
+        if any(l.startswith("<<<<<<< ") for l in lines) and any(l.startswith(">>>>>>> ") for l in lines):
+            return {"error": "Le résultat contient encore des marqueurs de conflit (<<<<<<<) — retire-les avant d'enregistrer."}
         file_path = Path(path) / file
         file_path.write_text(content, encoding="utf-8")
         out, err, code = run_git(path, "add", "--", file)
@@ -1175,7 +1209,20 @@ class Api:
         except Exception as e:
             return {"error": f"Erreur inattendue à l'ouverture de l'IDE : {e}"}
 
-    def _open_in_ide_impl(self, path, ide=None):
+    def open_file_in_ide(self, path, file, ide=None):
+        # JetBrains launchers accept a file path in place of the project
+        # path — they open the containing project (or focus it if already
+        # open) and jump straight to that file, which is exactly what the
+        # diff sheet's "Ouvrir dans ..." button wants.
+        if not _safe_repo_file(path, file):
+            return {"error": "Chemin de fichier invalide"}
+        try:
+            return self._open_in_ide_impl(path, ide, target=str(Path(path) / file))
+        except Exception as e:
+            return {"error": f"Erreur inattendue à l'ouverture de l'IDE : {e}"}
+
+    def _open_in_ide_impl(self, path, ide=None, target=None):
+        target = target or path
         config = load_config()
         repo = next((r for r in config["repos"] if r["path"] == path), None)
         launcher = ide or (repo["ide"] if repo else detect_default_ide(path))
@@ -1233,7 +1280,7 @@ class Api:
         # existing instance over IPC, which is what actually opens the right
         # project instead of just refocusing whatever was already open.
         try:
-            subprocess.Popen([launcher, path], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.Popen([launcher, target], shell=True, creationflags=subprocess.CREATE_NO_WINDOW)
             _last_launch_at[launcher] = now
             if ide and repo:
                 repo["ide"] = ide
@@ -1260,10 +1307,19 @@ class Api:
 
         return {"ok": True, "log": f"{launcher} lancé pour {Path(path).name}"}
 
-    def commit(self, path, message):
+    def commit(self, path, message, files=None):
         if not message:
             return {"error": "Message de commit vide"}
-        out, err, code = run_git(path, "add", "-A")
+        # An explicit file selection stages only those paths, so files left
+        # unchecked in the commit panel stay untouched (not committed, not
+        # even staged) instead of the previous always-`add -A` behavior.
+        if files:
+            safe_files = [f for f in files if _safe_repo_file(path, f)]
+            if not safe_files:
+                return {"error": "Aucun fichier valide sélectionné"}
+            out, err, code = run_git(path, "add", "--", *safe_files)
+        else:
+            out, err, code = run_git(path, "add", "-A")
         if code != 0:
             return {"error": err}
         out, err, code = run_git(path, "commit", "-m", message)
@@ -1289,6 +1345,76 @@ class Api:
                     "conflicted": conflicted,
                 }
             return {"error": message}
+        return {"ok": True}
+
+    def list_stashes(self, path):
+        # Stashes are just commits, so `git log`-style format placeholders
+        # work here too. %gs is the reflog subject — "On <branch>: <msg>"
+        # for a custom message, "WIP on <branch>: <hash> <subject>" for the
+        # default auto-generated one — parsed below to split branch/message.
+        out, err, code = run_git(path, "stash", "list", "--format=%gd\x1f%gs\x1f%cr")
+        if code != 0:
+            return {"error": err}
+        stashes = []
+        for line in out.splitlines():
+            if not line:
+                continue
+            parts = line.split("\x1f")
+            if len(parts) != 3:
+                continue
+            ref, subject, rel_date = parts
+            m = re.match(r"^(?:WIP on|On) ([^:]+): (.*)$", subject)
+            stashes.append({
+                "ref": ref,
+                "branch": m.group(1) if m else None,
+                "message": m.group(2) if m else subject,
+                "date": rel_date,
+            })
+        return {"stashes": stashes}
+
+    def stash_push(self, path, message=None, files=None):
+        args = ["stash", "push"]
+        if message:
+            args += ["-m", message]
+        if files:
+            safe_files = [f for f in files if _safe_repo_file(path, f)]
+            if not safe_files:
+                return {"error": "Aucun fichier valide sélectionné"}
+            # Naming untracked files explicitly here stashes them too,
+            # without needing the separate -u/--include-untracked flag.
+            args += ["--", *safe_files]
+        out, err, code = run_git(path, *args)
+        if code != 0:
+            return {"error": err or out}
+        return {"ok": True}
+
+    def _stash_conflict_result(self, path, out, err):
+        status = self.git_status(path)
+        conflicted = status.get("conflicted", [])
+        message = "\n".join(filter(None, [out, err]))
+        if conflicted:
+            return {
+                "error": f"Conflit sur {len(conflicted)} fichier(s) en réappliquant le stash : {', '.join(conflicted)}",
+                "conflicted": conflicted,
+            }
+        return {"error": message}
+
+    def stash_pop(self, path, ref):
+        out, err, code = run_git(path, "stash", "pop", ref)
+        if code != 0:
+            return self._stash_conflict_result(path, out, err)
+        return {"ok": True}
+
+    def stash_apply(self, path, ref):
+        out, err, code = run_git(path, "stash", "apply", ref)
+        if code != 0:
+            return self._stash_conflict_result(path, out, err)
+        return {"ok": True}
+
+    def stash_drop(self, path, ref):
+        out, err, code = run_git(path, "stash", "drop", ref)
+        if code != 0:
+            return {"error": err or out}
         return {"ok": True}
 
     def global_search(self, query):
@@ -1885,12 +2011,53 @@ class Api:
                 commits.append({"hash": parts[0], "short": parts[1], "author": parts[2], "date": parts[3], "subject": parts[4]})
         return {"commits": commits}
 
-    def get_diff(self, path):
-        out, err, code = run_git(path, "diff", "HEAD")
+    def list_repo_files(self, path):
+        # Tracked + untracked-but-not-gitignored, in one flat list — the
+        # same exclusion git itself already applies, so node_modules/build
+        # output stay out of the browser tree without reimplementing
+        # .gitignore matching here.
+        out, err, code = run_git(path, "ls-files", "--cached", "--others", "--exclude-standard")
+        if code != 0:
+            return {"error": err}
+        return {"files": [f for f in out.splitlines() if f]}
+
+    def read_file_content(self, path, file):
+        if not _safe_repo_file(path, file):
+            return {"error": "Chemin de fichier invalide"}
+        file_path = Path(path) / file
+        if not file_path.is_file():
+            return {"error": "Fichier introuvable"}
+        try:
+            size = file_path.stat().st_size
+            if size > 2 * 1024 * 1024:
+                return {"error": "Fichier trop volumineux pour l'aperçu (> 2 Mo) — ouvre-le dans l'IDE.", "tooLarge": True}
+            data = file_path.read_bytes()
+        except OSError as e:
+            return {"error": str(e)}
+        if b"\x00" in data[:8000]:
+            return {"binary": True, "size": size}
+        return {"content": data.decode("utf-8", errors="replace"), "size": size}
+
+    def get_diff(self, path, files=None, full=False):
+        # Scoping to a file selection keeps the AI-generated message (and
+        # this diff) describing only what's actually about to be committed,
+        # instead of every unrelated change sitting in the working tree.
+        # `full` swaps git's default 3-line hunk context for effectively the
+        # whole file in one hunk — used by the Code tab's file viewer to
+        # show a complete file with its uncommitted changes highlighted,
+        # rather than a compact patch. The AI-summary cap (20000 chars)
+        # doesn't apply there — it's sized for read_file_content's own
+        # 2 MB cap instead.
+        safe_files = [f for f in files if _safe_repo_file(path, f)] if files else None
+        scope = ["--", *safe_files] if safe_files else []
+        unified = ["--unified=100000"] if full else []
+        cap = 2 * 1024 * 1024 if full else 20000
+
+        out, err, code = run_git(path, "diff", "HEAD", *unified, *scope)
         if code != 0:
             return {"error": err or "git diff a échoué"}
         if out.strip():
-            return {"diff": out[:20000]}
+            return {"diff": out[:cap]}
 
         # `git diff HEAD` never covers untracked files, so a repo that's
         # entirely new files (first commit, or a freshly scanned repo) comes
@@ -1899,21 +2066,24 @@ class Api:
         # everything on every call was the fix, but it made generation
         # noticeably slower even for the common "some tracked files
         # modified" case, which the plain diff above already handles fine.
-        run_git(path, "add", "-A")
-        out, err, code = run_git(path, "diff", "--cached")
-        run_git(path, "reset")
+        if safe_files:
+            run_git(path, "add", "--", *safe_files)
+        else:
+            run_git(path, "add", "-A")
+        out, err, code = run_git(path, "diff", "--cached", *unified, *scope)
+        run_git(path, "reset", *scope)
         if code != 0:
             return {"error": err or "git diff a échoué"}
-        return {"diff": out[:20000]}
+        return {"diff": out[:cap]}
 
-    def generate_commit_message(self, path, language=None):
+    def generate_commit_message(self, path, language=None, files=None):
         ai = load_config().get("ai", {})
         provider = ai.get("provider")
         is_cli = provider in ("claude-code", "codex", "cli")
         if not is_cli and not ai.get("api_key"):
             return {"error": "Aucune clé API configurée (voir Paramètres IA)"}
 
-        diff_result = self.get_diff(path)
+        diff_result = self.get_diff(path, files)
         if diff_result.get("error"):
             return diff_result
         diff = diff_result.get("diff", "").strip()

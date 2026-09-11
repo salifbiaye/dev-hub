@@ -1,10 +1,11 @@
-import { useEffect, useState, useCallback, useRef } from 'react'
+import { useEffect, useState, useCallback, useRef, useMemo } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
 import {
   IconFolder,
+  IconFile,
   IconLayers,
   IconBranch,
   IconArrowUp,
@@ -2039,15 +2040,19 @@ function DatabasePanel({ repo, onNotify }) {
 
   if (status === 'error') {
     return (
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-3">
         <ConnectionBadge info={connInfo} />
-        <div className="rounded-lg border border-danger/30 bg-danger-bg p-3 text-xs text-danger">{connError}</div>
+        <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-danger/40 bg-danger-bg p-8 text-center">
+          <IconAlertCircle className="h-8 w-8 text-danger" />
+          <p className="text-sm font-medium text-text">Oups, la connexion a échoué</p>
+          <p className="max-w-sm font-mono text-[11px] text-muted">{connError}</p>
+        </div>
         {configOpen ? (
-          <div className="w-72">
+          <div className="w-72 self-center">
             <DbConfigForm repo={repo} info={connInfo} onSaved={onConfigSaved} onCancel={() => setConfigOpen(false)} onNotify={onNotify} />
           </div>
         ) : (
-          <Button variant="ghost" className="self-start" onClick={() => setConfigOpen(true)}>
+          <Button variant="ghost" className="self-center" onClick={() => setConfigOpen(true)}>
             <IconSettings className="h-3.5 w-3.5" />
             Configurer la connexion
           </Button>
@@ -2872,6 +2877,7 @@ function ConflictResolverModal({ path, file, onClose, onSaved, onNotify }) {
 function ConflictPanel({ path, conflicted, onOpenIde, onNotify, onRefresh }) {
   const [busy, setBusy] = useState(false)
   const [resolvingFile, setResolvingFile] = useState(null)
+  const [confirmAbort, setConfirmAbort] = useState(false)
 
   async function markResolved(file) {
     setBusy(true)
@@ -2897,7 +2903,7 @@ function ConflictPanel({ path, conflicted, onOpenIde, onNotify, onRefresh }) {
         <h3 className="text-sm font-semibold text-danger">
           Conflit sur {conflicted.length} fichier{conflicted.length > 1 ? 's' : ''}
         </h3>
-        <Button variant="ghost" disabled={busy} onClick={abort}>
+        <Button variant="ghost" disabled={busy} onClick={() => setConfirmAbort(true)}>
           Annuler le merge
         </Button>
       </div>
@@ -2905,6 +2911,18 @@ function ConflictPanel({ path, conflicted, onOpenIde, onNotify, onRefresh }) {
         Résous chaque fichier ici, ou dans l'IDE puis marque-le résolu. Une fois tous résolus, valide un commit
         pour terminer le merge.
       </p>
+      {confirmAbort && (
+        <ConfirmModal
+          title="Annuler le merge ?"
+          message="Le merge en cours et toute résolution de conflit déjà faite seront abandonnés. Cette action est irréversible."
+          confirmLabel="Annuler le merge"
+          onCancel={() => setConfirmAbort(false)}
+          onConfirm={() => {
+            setConfirmAbort(false)
+            abort()
+          }}
+        />
+      )}
       <div className="flex flex-col gap-1.5">
         {conflicted.map((file) => (
           <div key={file} className="flex items-center justify-between rounded-md bg-base/60 px-3 py-2">
@@ -2940,10 +2958,736 @@ function ConflictPanel({ path, conflicted, onOpenIde, onNotify, onRefresh }) {
   )
 }
 
+// Turns a `git diff` unified-diff blob into per-line rows with old/new line
+// numbers, so both the inline expand and the sheet can render the same
+// gutter-style view. Preamble lines (diff --git/index/---/+++) are dropped —
+// the file path is already shown by the caller.
+function parseDiffLines(diffText) {
+  const rows = []
+  let oldLine = 0
+  let newLine = 0
+  for (const line of (diffText || '').split('\n')) {
+    if (line.startsWith('diff --git') || line.startsWith('index ') || line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('\\')) {
+      continue
+    }
+    const hunk = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
+    if (hunk) {
+      oldLine = parseInt(hunk[1], 10)
+      newLine = parseInt(hunk[2], 10)
+      rows.push({ type: 'hunk', text: line })
+      continue
+    }
+    if (line.startsWith('+')) {
+      rows.push({ type: 'add', text: line.slice(1), newLine: newLine++ })
+    } else if (line.startsWith('-')) {
+      rows.push({ type: 'rem', text: line.slice(1), oldLine: oldLine++ })
+    } else {
+      rows.push({ type: 'ctx', text: line.slice(1), oldLine: oldLine++, newLine: newLine++ })
+    }
+  }
+  return rows
+}
+
+function DiffView({ diffText, loading }) {
+  const rows = useMemo(() => parseDiffLines(diffText), [diffText])
+  const scrollRef = useRef(null)
+
+  // The scroll container could land on a non-zero scrollLeft on first
+  // paint instead of resting at 0 — force it back left whenever the diff
+  // we're showing changes, so a freshly opened file always starts readable
+  // instead of scrolled off into blank highlighted rows. Done both
+  // synchronously and a frame later (a late webfont swap/reflow can shift
+  // scroll position after the first pass), and `overflowAnchor: 'none'`
+  // below opts this container out of the browser's own scroll-anchoring
+  // adjustments so it can't silently move again after that.
+  useEffect(() => {
+    if (!scrollRef.current) return
+    scrollRef.current.scrollLeft = 0
+    const raf = requestAnimationFrame(() => {
+      if (scrollRef.current) scrollRef.current.scrollLeft = 0
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [diffText])
+
+  if (loading) return <p className="px-3 py-2 text-[11px] text-muted">Chargement du diff…</p>
+  if (!diffText?.trim()) return <p className="px-3 py-2 text-[11px] text-muted">Aucune différence</p>
+  // Table layout instead of flex rows: a `flex` row only ever renders as
+  // wide as the scroll container's own width, so its background stopped
+  // dead at the visible edge instead of following the line's full content
+  // when scrolled horizontally. A CSS table auto-sizes to its widest row,
+  // and every table-row is guaranteed to span that full width, so the
+  // highlight now scrolls with the code instead of cutting off. Every row
+  // (hunk headers included) uses the same 3-cell table-row structure —
+  // mixing in plain divs made the browser generate anonymous rows around
+  // them, which threw off row heights and the table's width math.
+  return (
+    <div ref={scrollRef} style={{ overflowAnchor: 'none' }} className="overflow-x-auto font-mono text-[10.5px] leading-relaxed">
+      <div style={{ display: 'table', minWidth: '100%' }}>
+        {rows.map((r, i) => (
+          <div
+            key={i}
+            style={{ display: 'table-row' }}
+            className={r.type === 'add' ? 'bg-success-bg' : r.type === 'rem' ? 'bg-danger-bg' : ''}
+          >
+            <div style={{ display: 'table-cell' }} className="w-8 select-none px-1 text-right text-muted/50">
+              {r.type === 'hunk' ? '' : r.oldLine ?? ''}
+            </div>
+            <div style={{ display: 'table-cell' }} className="w-8 select-none px-1 text-right text-muted/50">
+              {r.type === 'hunk' ? '' : r.newLine ?? ''}
+            </div>
+            <div
+              style={{ display: 'table-cell' }}
+              className={`whitespace-pre px-2 ${
+                r.type === 'hunk' ? 'text-muted/70' : r.type === 'add' ? 'text-success' : r.type === 'rem' ? 'text-danger' : 'text-text'
+              }`}
+            >
+              {r.text || ' '}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function useFileDiff(repoPath, file) {
+  const [diff, setDiff] = useState('')
+  const [loading, setLoading] = useState(true)
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    api()
+      .get_diff(repoPath, [file])
+      .then((r) => {
+        if (alive) {
+          setDiff(r?.diff || '')
+          setLoading(false)
+        }
+      })
+    return () => {
+      alive = false
+    }
+  }, [repoPath, file])
+  return { diff, loading }
+}
+
+function InlineFileDiff({ repoPath, file }) {
+  const { diff, loading } = useFileDiff(repoPath, file)
+  return <DiffView diffText={diff} loading={loading} />
+}
+
+function DiffSheet({ repo, file, onClose, onNotify }) {
+  const { diff, loading } = useFileDiff(repo.path, file)
+  const [opening, setOpening] = useState(false)
+  const stats = useMemo(() => {
+    const rows = parseDiffLines(diff)
+    return {
+      add: rows.filter((r) => r.type === 'add').length,
+      rem: rows.filter((r) => r.type === 'rem').length,
+    }
+  }, [diff])
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/50" onClick={onClose}>
+      <div
+        className="flex h-full w-[460px] flex-col border-l border-border bg-surface shadow-[var(--card-shadow-hover)]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2.5 border-b border-border px-3.5 py-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="truncate font-mono text-xs text-text">{file}</p>
+            <p className="font-mono text-[10.5px]">
+              <span className="text-success">+{stats.add}</span> <span className="text-danger">-{stats.rem}</span>
+            </p>
+          </div>
+          <Button
+            variant="ghost"
+            disabled={opening}
+            onClick={async () => {
+              setOpening(true)
+              const result = await api().open_file_in_ide(repo.path, file)
+              if (result?.error) onNotify(result.error, true)
+              setOpening(false)
+            }}
+          >
+            <IconExternal className="h-3.5 w-3.5" />
+            Ouvrir dans {IDE_LABELS[repo.ide] || repo.ide || "l'éditeur"}
+          </Button>
+          <button onClick={onClose} className="cursor-pointer text-muted hover:text-text" title="Fermer">
+            <IconClose className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="theme-scroll flex-1 overflow-y-auto">
+          <DiffView diffText={diff} loading={loading} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Checkbox file list grouped by status (Nouveaux/Conflits/Modifiés), with a
+// "select all" row and per-group toggles — shared shape between the Commit
+// panel and the Stash panel so choosing "which files" works the same way
+// in both places.
+function FileSelector({ files, selected, onToggle }) {
+  const groups = [
+    { key: '?', label: 'Nouveaux', match: (f) => f.status === '?' },
+    { key: 'U', label: 'Conflits', match: (f) => f.status === 'U' },
+    { key: 'M', label: 'Modifiés', match: (f) => f.status !== '?' && f.status !== 'U' },
+  ]
+    .map((g) => ({ ...g, files: files.filter(g.match) }))
+    .filter((g) => g.files.length > 0)
+  const allSelected = files.length > 0 && files.every((f) => selected.has(f.path))
+
+  return (
+    <div className="max-h-52 overflow-y-auto rounded-md border border-border bg-base">
+      <label className="flex cursor-pointer items-center gap-2 border-b border-border px-2 py-1 text-[11px] text-text hover:bg-surface-hover">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          onChange={() => onToggle(files.map((f) => f.path), !allSelected)}
+          className="cursor-pointer"
+        />
+        <span className="font-medium">
+          Tout sélectionner ({selected.size}/{files.length})
+        </span>
+      </label>
+      {groups.map((g) => {
+        const groupSelected = g.files.every((f) => selected.has(f.path))
+        return (
+          <div key={g.key}>
+            <label className="flex cursor-pointer items-center gap-2 border-b border-border bg-surface-hover/60 px-2 py-1 text-[10.5px] font-medium text-muted hover:text-text">
+              <input
+                type="checkbox"
+                checked={groupSelected}
+                onChange={() => onToggle(g.files.map((f) => f.path), !groupSelected)}
+                className="cursor-pointer"
+              />
+              <span>{g.label} ({g.files.length})</span>
+            </label>
+            {g.files.map((f) => (
+              <label
+                key={f.path}
+                className="flex cursor-pointer items-center gap-2 border-b border-border px-2 py-1 text-[11px] last:border-b-0 hover:bg-surface-hover"
+              >
+                <input
+                  type="checkbox"
+                  checked={selected.has(f.path)}
+                  onChange={() => onToggle([f.path], !selected.has(f.path))}
+                  className="cursor-pointer"
+                />
+                <span
+                  className={`w-5 shrink-0 text-center font-mono font-medium ${
+                    f.status === '?' ? 'text-success' : f.status === 'U' ? 'text-danger' : 'text-warning'
+                  }`}
+                  title={f.status === '?' ? 'Nouveau fichier' : f.status === 'U' ? 'Conflit' : 'Modifié'}
+                >
+                  {f.status === '?' ? 'A' : f.status === 'U' ? '!' : 'M'}
+                </span>
+                <span className="truncate font-mono text-muted">{f.path}</span>
+              </label>
+            ))}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function StashPanel({ repo, status, stashes, onNotify, onRefresh }) {
+  const [message, setMessage] = useState('')
+  const [selectedFiles, setSelectedFiles] = useState(() => new Set())
+  const [busy, setBusy] = useState(false)
+  // A stash that's already been applied/popped once (conflict or not)
+  // stays in the list until dropped — clicking Apply/Pop on it again would
+  // replay the same content on top of what's already there, which is a
+  // near-guaranteed second conflict or duplicated code, not a safe retry.
+  const [appliedRefs, setAppliedRefs] = useState(() => new Set())
+  const hasConflict = (status?.conflicted?.length || 0) > 0
+  const files = status?.files || []
+
+  useEffect(() => {
+    setSelectedFiles(new Set(files.map((f) => f.path)))
+    // Only reset when the set of changed files actually changes, not on
+    // every status refresh (which would wipe the user's in-progress pick).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files.map((f) => f.path).join('|')])
+
+  const toggleFiles = (paths, select) => {
+    setSelectedFiles((prev) => {
+      const next = new Set(prev)
+      paths.forEach((p) => (select ? next.add(p) : next.delete(p)))
+      return next
+    })
+  }
+
+  async function doPush() {
+    setBusy(true)
+    const fileArgs = files.length > 0 ? Array.from(selectedFiles) : undefined
+    const result = await api().stash_push(repo.path, message.trim() || undefined, fileArgs)
+    if (result?.error) onNotify(result.error, true)
+    else onNotify('Mis de côté')
+    setMessage('')
+    await onRefresh()
+    setBusy(false)
+  }
+
+  async function doAction(promiseFn, label, ref) {
+    setBusy(true)
+    // Mark before the call resolves, not just on failure — even a pop that
+    // ultimately conflicts has already written that stash's content into
+    // the working tree by the time it reports the error.
+    if (ref) setAppliedRefs((prev) => new Set(prev).add(ref))
+    const result = await promiseFn()
+    if (result?.error) onNotify(`${label} : ${result.error}`, true)
+    else onNotify(`${label} OK`)
+    await onRefresh()
+    setBusy(false)
+  }
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-2 shadow-[var(--card-shadow)]">
+      {files.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <FileSelector files={files} selected={selectedFiles} onToggle={toggleFiles} />
+          <div className="flex gap-2">
+            <input
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              placeholder="Message (optionnel)"
+              className="flex-1 rounded-md border border-border bg-base px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+            />
+            <Button
+              variant="primary"
+              disabled={busy || selectedFiles.size === 0}
+              title={selectedFiles.size === 0 ? 'Sélectionne au moins un fichier' : undefined}
+              onClick={doPush}
+            >
+              <IconPlus className="h-3.5 w-3.5" />
+              Mettre de côté
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="px-1 text-[10.5px] font-medium text-muted">
+        {stashes.length > 0 ? `${stashes.length} en attente` : 'Aucun stash'}
+      </div>
+
+      {stashes.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {stashes.map((s) => {
+            const alreadyApplied = appliedRefs.has(s.ref)
+            const blocked = busy || hasConflict || alreadyApplied
+            const blockedTitle = hasConflict
+              ? 'Résous le conflit en cours avant de toucher au stash'
+              : alreadyApplied
+                ? 'Déjà appliqué — supprime-le plutôt que de le réappliquer par-dessus'
+                : undefined
+            return (
+            <div key={s.ref} className="flex items-center gap-2 rounded-md border border-border bg-base px-2.5 py-2">
+              <IconLayers className="h-3.5 w-3.5 shrink-0 text-accent" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] text-text">{s.message}</p>
+                <p className="truncate font-mono text-[10px] text-muted">
+                  {s.branch || '?'} · {s.date}
+                </p>
+              </div>
+              <button
+                disabled={blocked}
+                title={blockedTitle}
+                onClick={() => doAction(() => api().stash_apply(repo.path, s.ref), 'Apply', s.ref)}
+                className="shrink-0 rounded border border-border px-2 py-0.5 text-[11px] text-text hover:border-border-strong hover:bg-surface-hover disabled:opacity-40 cursor-pointer"
+              >
+                Appliquer
+              </button>
+              <button
+                disabled={blocked}
+                title={blockedTitle}
+                onClick={() => doAction(() => api().stash_pop(repo.path, s.ref), 'Pop', s.ref)}
+                className="shrink-0 rounded border border-accent/40 px-2 py-0.5 text-[11px] text-accent hover:bg-accent/10 disabled:opacity-40 cursor-pointer"
+              >
+                Pop
+              </button>
+              <button
+                disabled={busy || hasConflict}
+                title={hasConflict ? 'Résous le conflit en cours avant de toucher au stash' : 'Supprimer ce stash'}
+                onClick={() => doAction(() => api().stash_drop(repo.path, s.ref), 'Suppression')}
+                className="shrink-0 cursor-pointer text-muted hover:text-danger disabled:opacity-40"
+              >
+                <IconTrash className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            )
+          })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Flat "a/b/c.js" paths from `git ls-files` turned into a nested tree the
+// sidebar can render/collapse — building it once client-side is simpler
+// than a lazy per-directory backend round trip, and repos small enough to
+// browse comfortably here don't have enough files for it to matter.
+function buildFileTree(paths, statusMap) {
+  const root = { name: '', type: 'dir', path: '', children: new Map() }
+  for (const filePath of paths) {
+    const parts = filePath.split('/')
+    let node = root
+    parts.forEach((part, i) => {
+      const isFile = i === parts.length - 1
+      const childPath = node.path ? `${node.path}/${part}` : part
+      if (!node.children.has(part)) {
+        node.children.set(
+          part,
+          isFile
+            ? { name: part, type: 'file', path: childPath, status: statusMap?.[childPath] }
+            : { name: part, type: 'dir', path: childPath, children: new Map() }
+        )
+      }
+      node = node.children.get(part)
+    })
+  }
+  return root
+}
+
+function sortedTreeChildren(node) {
+  return Array.from(node.children.values()).sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'dir' ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSelectFile }) {
+  const indent = { paddingLeft: `${depth * 14 + 6}px` }
+  if (node.type === 'file') {
+    const isSelected = selectedPath === node.path
+    return (
+      <button
+        onClick={() => onSelectFile(node.path)}
+        style={indent}
+        className={`flex w-full cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] ${
+          isSelected ? 'bg-accent-bg text-accent' : 'text-muted hover:bg-surface-hover hover:text-text'
+        }`}
+      >
+        <IconFile className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate font-mono">{node.name}</span>
+        {node.status && (
+          <span
+            className={`shrink-0 font-mono text-[10px] font-semibold ${
+              node.status === '?' ? 'text-success' : node.status === 'U' ? 'text-danger' : 'text-warning'
+            }`}
+            title={node.status === '?' ? 'Nouveau fichier' : node.status === 'U' ? 'Conflit' : 'Modifié'}
+          >
+            {node.status === '?' ? 'A' : node.status === 'U' ? '!' : 'M'}
+          </span>
+        )}
+      </button>
+    )
+  }
+  const isOpen = expanded.has(node.path)
+  return (
+    <div>
+      <button
+        onClick={() => onToggleDir(node.path)}
+        style={indent}
+        className="flex w-full cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-text hover:bg-surface-hover"
+      >
+        <IconChevronDown className={`h-3 w-3 shrink-0 transition-transform duration-150 ${isOpen ? '' : '-rotate-90'}`} />
+        <IconFolder className="h-3.5 w-3.5 shrink-0 text-accent" />
+        <span className="truncate font-medium">{node.name}</span>
+      </button>
+      {isOpen &&
+        sortedTreeChildren(node).map((child) => (
+          <FileTreeNode
+            key={child.path}
+            node={child}
+            depth={depth + 1}
+            expanded={expanded}
+            onToggleDir={onToggleDir}
+            selectedPath={selectedPath}
+            onSelectFile={onSelectFile}
+          />
+        ))}
+    </div>
+  )
+}
+
+function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasChanges }) {
+  const [content, setContent] = useState(null)
+  const [diffRows, setDiffRows] = useState(null)
+  const [meta, setMeta] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [opening, setOpening] = useState(false)
+  const [search, setSearch] = useState('')
+  const [matchIndex, setMatchIndex] = useState(0)
+  const lineRefs = useRef([])
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    setSearch('')
+    if (hasChanges) {
+      // Full context (one giant hunk) instead of git's default 3-line
+      // window — the point here is browsing the whole file with its
+      // uncommitted changes highlighted, not a compact patch review.
+      api()
+        .get_diff(repo.path, [file], true)
+        .then((r) => {
+          if (!alive) return
+          setDiffRows(parseDiffLines(r?.diff || ''))
+          setContent(null)
+          setMeta(r?.error ? r : null)
+          setLoading(false)
+        })
+    } else {
+      api()
+        .read_file_content(repo.path, file)
+        .then((r) => {
+          if (!alive) return
+          if (r?.content != null) {
+            setContent(r.content)
+            setMeta(null)
+          } else {
+            setContent(null)
+            setMeta(r)
+          }
+          setDiffRows(null)
+          setLoading(false)
+        })
+    }
+    return () => {
+      alive = false
+    }
+  }, [repo.path, file, hasChanges])
+
+  // One shape for both modes — plain content becomes "context" rows with
+  // no diff type, so search/highlight/rendering below doesn't need to
+  // branch on which mode produced them.
+  const rows = useMemo(() => {
+    if (diffRows) return diffRows.filter((r) => r.type !== 'hunk')
+    if (content != null) return content.split('\n').map((text, i) => ({ type: 'ctx', text, oldLine: i + 1, newLine: i + 1 }))
+    return []
+  }, [diffRows, content])
+
+  const needle = search.trim().toLowerCase()
+  const matches = useMemo(() => {
+    if (!needle) return []
+    const found = []
+    rows.forEach((row, i) => {
+      if (row.text.toLowerCase().includes(needle)) found.push(i)
+    })
+    return found
+  }, [needle, rows])
+
+  useEffect(() => {
+    setMatchIndex(0)
+  }, [needle])
+
+  useEffect(() => {
+    if (matches.length === 0) return
+    const targetLine = matches[((matchIndex % matches.length) + matches.length) % matches.length]
+    lineRefs.current[targetLine]?.scrollIntoView({ block: 'center' })
+  }, [matchIndex, matches])
+
+  return (
+    <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">{file}</span>
+        {rows.length > 0 && (
+          <div className="flex shrink-0 items-center gap-1">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Rechercher (Ctrl+F)…"
+              className="w-40 rounded-md border border-border bg-base px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
+            />
+            {needle && (
+              <>
+                <span className="whitespace-nowrap font-mono text-[10.5px] text-muted">
+                  {matches.length > 0 ? `${(matchIndex % matches.length) + 1}/${matches.length}` : '0/0'}
+                </span>
+                <button
+                  disabled={matches.length === 0}
+                  onClick={() => setMatchIndex((i) => i - 1)}
+                  className="cursor-pointer text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-30"
+                  title="Précédent"
+                >
+                  <IconChevronLeft className="h-3.5 w-3.5 rotate-90" />
+                </button>
+                <button
+                  disabled={matches.length === 0}
+                  onClick={() => setMatchIndex((i) => i + 1)}
+                  className="cursor-pointer text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-30"
+                  title="Suivant"
+                >
+                  <IconChevronDown className="h-3.5 w-3.5" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        <button
+          onClick={async () => {
+            // Ctrl+C on a plain selection doesn't reliably reach the real
+            // clipboard in this webview — same reason the terminal has its
+            // own copy button instead of relying on native copy. Copies the
+            // active selection if there is one, otherwise the whole file.
+            const selected = window.getSelection()?.toString()
+            const text = selected || rows.map((r) => r.text).join('\n')
+            const result = await copyText(text)
+            onNotify(result.ok ? 'Copié dans le presse-papier' : `Échec de la copie : ${result.reason}`, !result.ok)
+          }}
+          className="shrink-0 cursor-pointer text-muted hover:text-text"
+          title="Copier la sélection (ou tout le fichier si rien n'est sélectionné)"
+        >
+          <IconCopy className="h-3.5 w-3.5" />
+        </button>
+        <Button
+          variant="ghost"
+          disabled={opening}
+          onClick={async () => {
+            setOpening(true)
+            const result = await api().open_file_in_ide(repo.path, file)
+            if (result?.error) onNotify(result.error, true)
+            setOpening(false)
+          }}
+        >
+          <IconExternal className="h-3.5 w-3.5" />
+          Ouvrir dans {IDE_LABELS[repo.ide] || repo.ide || "l'éditeur"}
+        </Button>
+        <button
+          onClick={onToggleFullscreen}
+          className="shrink-0 cursor-pointer text-muted hover:text-text"
+          title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+        >
+          <IconMaximize className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {loading ? (
+        <p className="p-3 text-xs text-muted">Chargement…</p>
+      ) : meta?.binary ? (
+        <p className="p-3 text-xs text-muted">Fichier binaire — aperçu indisponible ({Math.round((meta.size || 0) / 1024)} Ko).</p>
+      ) : meta?.error ? (
+        <p className="p-3 text-xs text-danger">{meta.error}</p>
+      ) : (
+        <div className="theme-scroll flex-1 overflow-auto font-mono text-[11px] leading-relaxed">
+          <div style={{ display: 'table', minWidth: '100%' }}>
+            {rows.map((row, i) => {
+              const isMatch = needle && row.text.toLowerCase().includes(needle)
+              const diffBg = row.type === 'add' ? 'bg-success-bg' : row.type === 'rem' ? 'bg-danger-bg' : ''
+              return (
+                <div
+                  key={i}
+                  ref={(el) => (lineRefs.current[i] = el)}
+                  style={{ display: 'table-row' }}
+                  className={isMatch ? 'bg-warning-bg' : diffBg}
+                >
+                  <div style={{ display: 'table-cell' }} className="w-8 select-none px-1 text-right text-muted/50">
+                    {row.oldLine ?? ''}
+                  </div>
+                  <div style={{ display: 'table-cell' }} className="w-8 select-none px-1 text-right text-muted/50">
+                    {row.newLine ?? ''}
+                  </div>
+                  <div
+                    style={{ display: 'table-cell' }}
+                    className={`select-text cursor-text whitespace-pre px-2 ${
+                      row.type === 'add' ? 'text-success' : row.type === 'rem' ? 'text-danger' : 'text-text'
+                    }`}
+                  >
+                    {row.text || ' '}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CodeBrowserPanel({ repo, status, onNotify }) {
+  const [files, setFiles] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(() => new Set())
+  const [selectedPath, setSelectedPath] = useState(null)
+  const [fullscreen, setFullscreen] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    api()
+      .list_repo_files(repo.path)
+      .then((r) => {
+        if (!alive) return
+        setFiles(Array.isArray(r?.files) ? r.files : [])
+        setLoading(false)
+      })
+    return () => {
+      alive = false
+    }
+  }, [repo.path])
+
+  const statusMap = useMemo(() => Object.fromEntries((status?.files || []).map((f) => [f.path, f.status])), [status])
+  const tree = useMemo(() => buildFileTree(files, statusMap), [files, statusMap])
+
+  function toggleDir(path) {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(path)) next.delete(path)
+      else next.add(path)
+      return next
+    })
+  }
+
+  if (loading) return <p className="text-xs text-muted">Chargement de l'arborescence…</p>
+
+  return (
+    <div
+      className={
+        fullscreen
+          ? 'fixed inset-0 z-50 flex overflow-hidden bg-surface'
+          : 'flex h-[75vh] overflow-hidden rounded-lg border border-border bg-surface'
+      }
+    >
+      <div className="theme-scroll w-64 shrink-0 overflow-y-auto border-r border-border p-1.5">
+        {sortedTreeChildren(tree).map((child) => (
+          <FileTreeNode
+            key={child.path}
+            node={child}
+            depth={0}
+            expanded={expanded}
+            onToggleDir={toggleDir}
+            selectedPath={selectedPath}
+            onSelectFile={setSelectedPath}
+          />
+        ))}
+      </div>
+      {selectedPath ? (
+        <FileViewer
+          key={selectedPath}
+          repo={repo}
+          file={selectedPath}
+          onNotify={onNotify}
+          hasChanges={!!statusMap[selectedPath]}
+          fullscreen={fullscreen}
+          onToggleFullscreen={() => setFullscreen((v) => !v)}
+        />
+      ) : (
+        <div className="flex flex-1 items-center justify-center text-xs text-muted">Sélectionne un fichier</div>
+      )}
+    </div>
+  )
+}
+
 function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopRun, onClearRun, onBack, onRefreshList, onNotify }) {
   const [status, setStatus] = useState(repo.status)
   const [branches, setBranches] = useState([])
   const [branchBase, setBranchBase] = useState(null)
+  const [stashes, setStashes] = useState([])
+  const [stashOpen, setStashOpen] = useState(false)
   const [loadingBranches, setLoadingBranches] = useState(true)
   const [busy, setBusy] = useState(false)
   const [launching, setLaunching] = useState(false)
@@ -2952,6 +3696,18 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
   const [message, setMessage] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genLanguage, setGenLanguage] = useState('auto')
+  const [selectedFiles, setSelectedFiles] = useState(() => new Set())
+  const [expandedFile, setExpandedFile] = useState(null)
+  const [sheetFile, setSheetFile] = useState(null)
+
+  // Re-selecting "all files" whenever the panel opens (or the status
+  // refreshes while it's open) mirrors the previous always-commit-everything
+  // behavior as the default, while still letting the user narrow it down.
+  useEffect(() => {
+    if (commitOpen) {
+      setSelectedFiles(new Set((status?.files || []).map((f) => f.path)))
+    }
+  }, [commitOpen, status?.files])
 
   useEffect(() => {
     api()
@@ -2969,7 +3725,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
 
   async function generateCommitMessage() {
     setGenerating(true)
-    const result = await api().generate_commit_message(repo.path, genLanguage)
+    const result = await api().generate_commit_message(repo.path, genLanguage, Array.from(selectedFiles))
     if (result?.error) onNotify(result.error, true)
     else setMessage(result.message)
     setGenerating(false)
@@ -2977,13 +3733,15 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
 
   const loadAll = useCallback(async (forceFetch = false) => {
     setLoadingBranches(true)
-    const [freshStatus, branchResult] = await Promise.all([
+    const [freshStatus, branchResult, stashResult] = await Promise.all([
       api().git_status(repo.path),
       api().branches(repo.path, forceFetch),
+      api().list_stashes(repo.path),
     ])
     setStatus(freshStatus)
     setBranches(Array.isArray(branchResult?.branches) ? branchResult.branches : [])
     setBranchBase(branchResult?.base || null)
+    setStashes(Array.isArray(stashResult?.stashes) ? stashResult.stashes : [])
     setLoadingBranches(false)
     onRefreshList()
   }, [repo.path, onRefreshList])
@@ -3094,6 +3852,13 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
             <IconArrowUp className="h-3.5 w-3.5" />
             Push
           </Button>
+          <Button variant="ghost" disabled={busy} onClick={() => setStashOpen((v) => !v)}>
+            <IconLayers className="h-3.5 w-3.5" />
+            Stash
+            {stashes.length > 0 && (
+              <span className="rounded-full bg-accent px-1.5 py-0 text-[10px] font-medium text-base">{stashes.length}</span>
+            )}
+          </Button>
           <Button variant="ghost" disabled={busy} onClick={() => setCommitOpen((v) => !v)}>
             <IconGitCommit className="h-3.5 w-3.5" />
             Commit
@@ -3101,25 +3866,106 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
         </div>
       </div>
 
+      {stashOpen && (
+        <StashPanel repo={repo} status={status} stashes={stashes} onNotify={onNotify} onRefresh={loadAll} />
+      )}
+
       {commitOpen && (
         <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-2 shadow-[var(--card-shadow)]">
-          {status?.files?.length > 0 && (
-            <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-base">
-              {status.files.map((f) => (
-                <div key={f.path} className="flex items-center gap-2 border-b border-border px-2 py-1 text-[11px] last:border-b-0">
-                  <span
-                    className={`w-5 shrink-0 text-center font-mono font-medium ${
-                      f.status === '?' ? 'text-success' : f.status === 'U' ? 'text-danger' : 'text-warning'
-                    }`}
-                    title={f.status === '?' ? 'Nouveau fichier' : f.status === 'U' ? 'Conflit' : 'Modifié'}
-                  >
-                    {f.status === '?' ? 'A' : f.status === 'U' ? '!' : 'M'}
+          {status?.files?.length > 0 && (() => {
+            const groups = [
+              { key: '?', label: 'Nouveaux', match: (f) => f.status === '?' },
+              { key: 'U', label: 'Conflits', match: (f) => f.status === 'U' },
+              { key: 'M', label: 'Modifiés', match: (f) => f.status !== '?' && f.status !== 'U' },
+            ]
+              .map((g) => ({ ...g, files: status.files.filter(g.match) }))
+              .filter((g) => g.files.length > 0)
+            const allSelected = status.files.every((f) => selectedFiles.has(f.path))
+            const toggleFiles = (paths, select) => {
+              setSelectedFiles((prev) => {
+                const next = new Set(prev)
+                paths.forEach((p) => (select ? next.add(p) : next.delete(p)))
+                return next
+              })
+            }
+            return (
+              <div className="max-h-52 overflow-y-auto rounded-md border border-border bg-base">
+                <label className="flex cursor-pointer items-center gap-2 border-b border-border px-2 py-1 text-[11px] text-text hover:bg-surface-hover">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={() => toggleFiles(status.files.map((f) => f.path), !allSelected)}
+                    className="cursor-pointer"
+                  />
+                  <span className="font-medium">
+                    Tout sélectionner ({selectedFiles.size}/{status.files.length})
                   </span>
-                  <span className="truncate font-mono text-muted">{f.path}</span>
-                </div>
-              ))}
-            </div>
-          )}
+                </label>
+                {groups.map((g) => {
+                  const groupSelected = g.files.every((f) => selectedFiles.has(f.path))
+                  return (
+                    <div key={g.key}>
+                      <label className="flex cursor-pointer items-center gap-2 border-b border-border bg-surface-hover/60 px-2 py-1 text-[10.5px] font-medium text-muted hover:text-text">
+                        <input
+                          type="checkbox"
+                          checked={groupSelected}
+                          onChange={() => toggleFiles(g.files.map((f) => f.path), !groupSelected)}
+                          className="cursor-pointer"
+                        />
+                        <span>{g.label} ({g.files.length})</span>
+                      </label>
+                      {g.files.map((f) => {
+                        const isExpanded = expandedFile === f.path
+                        return (
+                          <div key={f.path}>
+                            <div
+                              className="flex cursor-pointer items-center gap-2 border-b border-border px-2 py-1 text-[11px] last:border-b-0 hover:bg-surface-hover"
+                              onClick={() => setExpandedFile(isExpanded ? null : f.path)}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedFiles.has(f.path)}
+                                onChange={() => toggleFiles([f.path], !selectedFiles.has(f.path))}
+                                onClick={(e) => e.stopPropagation()}
+                                className="cursor-pointer"
+                              />
+                              <span
+                                className={`w-5 shrink-0 text-center font-mono font-medium ${
+                                  f.status === '?' ? 'text-success' : f.status === 'U' ? 'text-danger' : 'text-warning'
+                                }`}
+                                title={f.status === '?' ? 'Nouveau fichier' : f.status === 'U' ? 'Conflit' : 'Modifié'}
+                              >
+                                {f.status === '?' ? 'A' : f.status === 'U' ? '!' : 'M'}
+                              </span>
+                              <span className="truncate font-mono text-muted">{f.path}</span>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setSheetFile(f.path)
+                                }}
+                                className="shrink-0 cursor-pointer text-muted hover:text-text"
+                                title="Ouvrir dans un panneau"
+                              >
+                                <IconExternal className="h-3 w-3" />
+                              </button>
+                              <IconChevronDown
+                                className={`h-3 w-3 shrink-0 text-muted transition-transform duration-150 ${isExpanded ? '' : '-rotate-90'}`}
+                              />
+                            </div>
+                            {isExpanded && (
+                              <div className="border-b border-border last:border-b-0">
+                                <InlineFileDiff repoPath={repo.path} file={f.path} />
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })()}
           <div className="flex flex-col gap-2">
             <textarea
               value={message}
@@ -3150,14 +3996,15 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
               <Button
                 variant="primary"
                 className="ml-auto"
-                disabled={busy || !message.trim()}
+                disabled={busy || !message.trim() || selectedFiles.size === 0}
+                title={selectedFiles.size === 0 ? 'Sélectionne au moins un fichier' : undefined}
                 onClick={async () => {
-                  await run(() => api().commit(repo.path, message), 'Commit')
+                  await run(() => api().commit(repo.path, message, Array.from(selectedFiles)), 'Commit')
                   setMessage('')
                   setCommitOpen(false)
                 }}
               >
-                Valider
+                Valider {selectedFiles.size > 0 && selectedFiles.size < (status?.files?.length || 0) ? `(${selectedFiles.size})` : ''}
               </Button>
             </div>
           </div>
@@ -3167,6 +4014,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
       <div className="theme-scroll flex items-center gap-1 overflow-x-auto border-b border-border">
         {[
           { id: 'branches', label: 'Branches' },
+          { id: 'code', label: 'Code' },
           { id: 'history', label: 'Historique' },
           { id: 'env', label: 'Env' },
           { id: 'ignore', label: 'Ignorer' },
@@ -3275,6 +4123,12 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
         )}
       </div>
 
+      {visitedTabs.has('code') && (
+        <div className={activeTab === 'code' ? '' : 'hidden'}>
+          <CodeBrowserPanel repo={repo} status={status} onNotify={onNotify} />
+        </div>
+      )}
+
       {visitedTabs.has('history') && (
         <div className={activeTab === 'history' ? '' : 'hidden'}>
           <HistoryPanel repo={repo} />
@@ -3310,6 +4164,8 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
           <AiSessionsPanel repo={repo} onNotify={onNotify} />
         </div>
       )}
+
+      {sheetFile && <DiffSheet repo={repo} file={sheetFile} onClose={() => setSheetFile(null)} onNotify={onNotify} />}
     </div>
   )
 }
@@ -3725,8 +4581,12 @@ function ProcessesPanel({
   const proxyOverride = active ? proxyByTab[active.path] : undefined
   // Local dev servers frame fine on their own, and proxying them would move
   // the page to a different origin — breaking their cookies, CORS and the
-  // HMR websocket. External sites are the ones that refuse framing.
-  const proxied = proxyOverride ?? (!!url && !isLocalUrl(url))
+  // HMR websocket (confirmed: it also breaks images/assets served from
+  // /_next/* since only the top HTML goes through the proxy, not its
+  // sub-resources). External sites are the ones that refuse framing.
+  // Local always wins over any stale override, matching the shield button
+  // being disabled for local URLs.
+  const proxied = !!url && !isLocalUrl(url) && (proxyOverride ?? true)
   const [frameSrc, setFrameSrc] = useState('')
 
   useEffect(() => {
@@ -3927,14 +4787,16 @@ function ProcessesPanel({
                   </button>
                   <button
                     onClick={() => toggleProxy(active.path)}
-                    disabled={!url}
+                    disabled={!url || isLocalUrl(url)}
                     className={`cursor-pointer disabled:cursor-not-allowed disabled:opacity-30 ${
                       proxied ? 'text-accent' : 'text-muted hover:text-text'
                     }`}
                     title={
-                      proxied
-                        ? `Proxy actif${proxyOverride === undefined ? ' (auto : site externe)' : ''} — retire X-Frame-Options. Cliquer pour charger en direct.`
-                        : `Chargement direct${proxyOverride === undefined ? ' (auto : URL locale)' : ''} — cliquer pour passer par le proxy.`
+                      url && isLocalUrl(url)
+                        ? "Proxy désactivé pour les URLs locales — seule la page HTML passerait par le proxy, pas ses images/ressources (/_next/*, etc.), qui casseraient en chargeant depuis une autre origine. Un serveur local s'affiche déjà en direct sans ça."
+                        : proxied
+                          ? `Proxy actif${proxyOverride === undefined ? ' (auto : site externe)' : ''} — retire X-Frame-Options. Cliquer pour charger en direct.`
+                          : `Chargement direct${proxyOverride === undefined ? ' (auto : URL locale)' : ''} — cliquer pour passer par le proxy.`
                     }
                   >
                     <IconShield className="h-3.5 w-3.5" />
@@ -4431,6 +5293,9 @@ const THEMES = [
   { id: 'crimson-black', label: 'Crimson Black', bg: '#0a0a0c', swatch: ['#8a6b70', '#ff3355', '#4ade80', '#e11d48'] },
   { id: 'emerald-black', label: 'Emerald Black', bg: '#0a0d0c', swatch: ['#6b8578', '#10b981', '#10b981', '#f87171'] },
   { id: 'amber-black', label: 'Amber Black', bg: '#0c0a08', swatch: ['#8a7860', '#f5a623', '#84cc16', '#ef4444'] },
+  { id: 'github-dark', label: 'GitHub Dark', bg: '#0d1117', swatch: ['#8b949e', '#58a6ff', '#3fb950', '#f85149'] },
+  { id: 'github-light', label: 'GitHub Light', bg: '#ffffff', swatch: ['#656d76', '#0969da', '#1a7f37', '#cf222e'] },
+  { id: 'webstorm', label: 'WebStorm', bg: '#1e1f22', swatch: ['#868a91', '#3574f0', '#499c54', '#db5c5c'] },
 ]
 
 function ThemeSwatch({ theme, className }) {

@@ -15,6 +15,15 @@ export function IconFolder({ className }) {
   )
 }
 
+export function IconFile({ className }) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M13 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-6-5Z" />
+      <path d="M13 3v5h6" />
+    </svg>
+  )
+}
+
 export function IconLayers({ className }) {
   return (
     <svg {...base} className={className}>
