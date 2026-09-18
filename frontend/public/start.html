@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Dev Hub — Navigateur</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<style>
+  :root {
+    --base: #0a0a0c;
+    --surface: #111114;
+    --surface-hover: #18181c;
+    --border: #232327;
+    --border-strong: #303035;
+    --text: #ededf0;
+    --muted: #8b8b93;
+    --accent: #6e56cf;
+    --danger: #f0616d;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--base);
+    color: var(--text);
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .wrap {
+    text-align: center;
+    max-width: 1000px;
+    padding: 24px;
+  }
+  img {
+    width: 100%;
+    border-radius: 16px;
+  }
+  .cards {
+    margin-top: 24px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 64px;
+    padding: 14px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    text-decoration: none;
+    overflow: hidden;
+  }
+  .card:hover { background: var(--surface-hover); border-color: var(--border-strong); }
+  .card img {
+    width: 24px;
+    height: 24px;
+    border-radius: 5px;
+    object-fit: contain;
+  }
+  .card span {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .card.empty {
+    border-style: dashed;
+    color: var(--muted);
+    font-size: 20px;
+    opacity: 0.5;
+    cursor: default;
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <img src="/devhub-start.png" alt="Dev Hub" />
+    <div id="cards" class="cards"></div>
+  </div>
+
+<script>
+(function () {
+  var GENERIC_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
+    '<circle cx="8" cy="8" r="6" fill="none" stroke="#8b8b93" stroke-width="1.3"/>' +
+    '<line x1="2.2" y1="8" x2="13.8" y2="8" stroke="#8b8b93" stroke-width="1"/>' +
+    '<path d="M8 2c2 1.8 2 10.2 0 12M8 2c-2 1.8-2 10.2 0 12" fill="none" stroke="#8b8b93" stroke-width="1"/>' +
+    '</svg>'
+  );
+
+  var params = new URLSearchParams(window.location.search);
+
+  // Mirrors Dev Hub's current theme (see BrowserWindowApi._start_page_url
+  // in main.py) instead of hardcoding one of its ~30 palettes here.
+  try {
+    var theme = JSON.parse(params.get('theme') || '{}');
+    Object.keys(theme).forEach(function (k) {
+      if (theme[k]) document.documentElement.style.setProperty('--' + k, theme[k]);
+    });
+  } catch (e) { /* malformed/missing param — keep defaults */ }
+
+  var favs = [];
+  try { favs = JSON.parse(params.get('favs') || '[]'); } catch (e) { /* ignore */ }
+
+  var elCards = document.getElementById('cards');
+
+  for (var i = 0; i < 4; i++) {
+    var site = favs[i];
+    if (site) {
+      var a = document.createElement('a');
+      a.className = 'card';
+      a.href = site.url;
+      a.title = site.url;
+
+      var img = document.createElement('img');
+      img.src = site.favicon || GENERIC_FAVICON;
+      img.alt = '';
+      img.onerror = function () { this.onerror = null; this.src = GENERIC_FAVICON; };
+      a.appendChild(img);
+
+      var label = document.createElement('span');
+      label.textContent = site.title || site.url;
+      a.appendChild(label);
+
+      elCards.appendChild(a);
+    } else {
+      var empty = document.createElement('div');
+      empty.className = 'card empty';
+      empty.textContent = '+';
+      empty.style.cursor = 'pointer';
+      // No bridge to the browser chrome exists from this tab's content
+      // page (only browser.html itself has a js_api) — a plain prompt +
+      // direct navigation needs neither, and the visit gets recorded like
+      // any other once it completes, so this slot naturally fills in on
+      // the next new tab.
+      empty.onclick = function () {
+        var url = window.prompt('Adresse du site à ajouter :');
+        if (!url || !url.trim()) return;
+        url = url.trim();
+        if (!/^[a-z]+:\/\//i.test(url)) url = 'https://' + url;
+        window.location.href = url;
+      };
+      elCards.appendChild(empty);
+    }
+  }
+})();
+</script>
+</body>
+</html>

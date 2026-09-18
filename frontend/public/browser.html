@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Dev Hub — Navigateur</title>
+<link rel="icon" type="image/x-icon" href="/favicon.ico" />
+<style>
+  :root {
+    color-scheme: dark;
+    --base: #0a0a0c;
+    --surface: #111114;
+    --surface-hover: #18181c;
+    --border: #232327;
+    --border-strong: #303035;
+    --text: #ededf0;
+    --muted: #8b8b93;
+    --accent: #6e56cf;
+    --danger: #f0616d;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: var(--base);
+    color: var(--text);
+    font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+    font-size: 13px;
+    overflow: hidden;
+  }
+  #app {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  #app.fullscreen #titlebar,
+  #app.fullscreen #toolbar {
+    display: none;
+  }
+
+  /* Title bar: tab strip + window controls, draggable except over buttons */
+  #titlebar {
+    display: flex;
+    align-items: center;
+    height: 36px;
+    flex-shrink: 0;
+    background: var(--base);
+    border-bottom: 1px solid var(--border);
+  }
+  #tabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+    padding: 4px 4px 4px 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  #tabs::-webkit-scrollbar { display: none; }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 180px;
+    min-width: 90px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    color: var(--muted);
+    cursor: pointer;
+    flex-shrink: 0;
+    -webkit-app-region: no-drag;
+  }
+  .tab:hover { background: var(--surface-hover); color: var(--text); }
+  .tab.active { background: var(--surface); border-color: var(--border-strong); color: var(--text); }
+  .tab.dragging { opacity: 0.4; }
+  .tab.drop-before { box-shadow: inset 2px 0 0 var(--accent); }
+  .tab.drop-after { box-shadow: inset -2px 0 0 var(--accent); }
+  .tab .favicon {
+    flex-shrink: 0;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    object-fit: contain;
+  }
+  .tab .favicon.generic {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.6;
+  }
+  .tab .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab .close {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    opacity: 0.6;
+  }
+  .tab .close:hover { opacity: 1; background: var(--danger); color: #fff; }
+  #new-tab {
+    flex-shrink: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--muted);
+    cursor: pointer;
+    -webkit-app-region: no-drag;
+  }
+  #new-tab:hover { background: var(--surface-hover); color: var(--text); }
+  #winctl {
+    display: flex;
+    flex-shrink: 0;
+    height: 100%;
+    -webkit-app-region: no-drag;
+  }
+  #winctl button {
+    width: 44px;
+    height: 100%;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+  }
+  #winctl button:hover { background: var(--surface-hover); color: var(--text); }
+  #winctl button.close-app:hover { background: var(--danger); color: #fff; }
+
+  /* Toolbar: back/forward/reload + address bar */
+  #toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 38px;
+    flex-shrink: 0;
+    padding: 0 8px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    -webkit-app-region: no-drag;
+  }
+  #toolbar button {
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  #toolbar button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+  #toolbar button:disabled { opacity: 0.35; cursor: default; }
+  #toolbar button.active { background: var(--accent); color: #fff; }
+  #address-wrap { flex: 1; }
+  #address {
+    width: 100%;
+    height: 26px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--base);
+    color: var(--text);
+    padding: 0 10px;
+    font-size: 12px;
+    font-family: ui-monospace, monospace;
+    outline: none;
+  }
+  #address:focus { border-color: var(--accent); }
+  /* Tab content is a native Windows control layered on top of this page,
+     not a DOM element -- CSS z-index can't put anything above it. An
+     absolutely-positioned dropdown would just render underneath it. Normal
+     document flow instead: this occupies real vertical space as a sibling
+     of #content-area, so #content-area's own rect (read by
+     reportContentRect()) shrinks and the native control gets pushed down
+     out of the way, the same mechanism already used for the inspector
+     panel and fullscreen chrome-hiding. */
+  #address-suggestions {
+    display: none;
+    flex-shrink: 0;
+    padding: 6px 8px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+  #address-suggestions.open { display: block; }
+  .suggestion-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .suggestion-row:hover, .suggestion-row.active { background: var(--surface-hover); }
+  .suggestion-row img { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+  .suggestion-row .s-title { color: var(--text); flex-shrink: 0; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .suggestion-row .s-url { color: var(--muted); font-family: ui-monospace, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  #content-area {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    background: var(--base);
+  }
+  #empty-state {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    color: var(--muted);
+    text-align: center;
+    padding: 24px;
+  }
+  #empty-state img { width: 100%; max-width: 320px; border-radius: 12px; opacity: 0.9; }
+</style>
+</head>
+<body>
+  <div id="app">
+    <div id="titlebar" class="pywebview-drag-region">
+      <div id="tabs"></div>
+      <div id="new-tab" title="Nouvel onglet">+</div>
+      <div id="winctl">
+        <button id="btn-min" title="Réduire">–</button>
+        <button id="btn-max" title="Agrandir / Restaurer">▢</button>
+        <button id="btn-close" class="close-app" title="Fermer">×</button>
+      </div>
+    </div>
+    <div id="toolbar">
+      <button id="btn-back" title="Précédent">‹</button>
+      <button id="btn-forward" title="Suivant">›</button>
+      <button id="btn-reload" title="Recharger">⟳</button>
+      <div id="address-wrap">
+        <input id="address" type="text" placeholder="URL…" spellcheck="false" autocomplete="off" />
+      </div>
+      <button id="btn-view-mobile" title="Vue mobile">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="7" y="2" width="10" height="20" rx="2" />
+          <line x1="11" y1="18" x2="13" y2="18" />
+        </svg>
+      </button>
+      <button id="btn-view-desktop" title="Vue bureau">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="4" width="20" height="13" rx="2" />
+          <line x1="8" y1="21" x2="16" y2="21" />
+          <line x1="12" y1="17" x2="12" y2="21" />
+        </svg>
+      </button>
+    </div>
+    <div id="address-suggestions"></div>
+    <div id="content-area">
+      <div id="empty-state">
+        <img src="/devhub-start.png" alt="Dev Hub" />
+        <p>Aucun onglet ouvert.</p>
+      </div>
+    </div>
+  </div>
+
+<script>
+(function () {
+  var tabs = [];
+  var activeId = null;
+  var draggedId = null;
+
+  var elTabs = document.getElementById('tabs');
+  var elAddress = document.getElementById('address');
+  var elBack = document.getElementById('btn-back');
+  var elForward = document.getElementById('btn-forward');
+  var elReload = document.getElementById('btn-reload');
+  var elViewMobile = document.getElementById('btn-view-mobile');
+  var elViewDesktop = document.getElementById('btn-view-desktop');
+  var elEmpty = document.getElementById('empty-state');
+
+  // Generic globe placeholder shown until a tab's real favicon arrives (or
+  // if it never gets one) -- kept as inline SVG so there's no extra file/
+  // network round trip for what's essentially always-visible chrome.
+  var GENERIC_FAVICON = 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
+    '<circle cx="8" cy="8" r="6" fill="none" stroke="#8b8b93" stroke-width="1.3"/>' +
+    '<line x1="2.2" y1="8" x2="13.8" y2="8" stroke="#8b8b93" stroke-width="1"/>' +
+    '<path d="M8 2c2 1.8 2 10.2 0 12M8 2c-2 1.8-2 10.2 0 12" fill="none" stroke="#8b8b93" stroke-width="1"/>' +
+    '</svg>'
+  );
+
+  function api() {
+    return window.pywebview && window.pywebview.api;
+  }
+
+  // Real browsers show blank chrome for their internal new-tab page rather
+  // than its actual internal URL -- our equivalent is start.html, served
+  // off _own_ui_base (e.g. http://localhost:5173/start.html), which is
+  // meaningless to a user and would look like a stray leftover URL in the
+  // address bar. Matched on path rather than a full-URL prefix since the
+  // port varies by run.
+  function isStartPage(url) {
+    return !!url && /\/start\.html(?:[?#]|$)/i.test(url);
+  }
+
+  function clearDropIndicators() {
+    var els = elTabs.querySelectorAll('.tab');
+    for (var i = 0; i < els.length; i++) {
+      els[i].classList.remove('drop-before', 'drop-after');
+    }
+  }
+
+  function render() {
+    elTabs.innerHTML = '';
+    tabs.forEach(function (t) {
+      var el = document.createElement('div');
+      el.className = 'tab' + (t.id === activeId ? ' active' : '');
+      el.draggable = true;
+      el.onclick = function () { api() && api().switch_tab(t.id); };
+      // #titlebar is a pywebview drag-region, and pywebview's own drag
+      // handler walks up from the click target looking for one — without
+      // this, starting a tab-reorder drag also drags the whole window
+      // (both listen to the same mousedown). Stopping it from bubbling
+      // past the tab keeps window-dragging working from the rest of the
+      // titlebar while tabs stay only for reordering.
+      el.onmousedown = function (e) { e.stopPropagation(); };
+
+      // --- drag-and-drop reordering (pure in-memory client state; the
+      // backend keeps tabs in an id-keyed dict, order only lives here) ---
+      el.ondragstart = function (e) {
+        draggedId = t.id;
+        el.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', t.id); } catch (err) { /* Edge/WebView2 quirk, harmless */ }
+      };
+      el.ondragend = function () {
+        el.classList.remove('dragging');
+        draggedId = null;
+        clearDropIndicators();
+      };
+      el.ondragover = function (e) {
+        if (!draggedId || draggedId === t.id) return;
+        e.preventDefault();
+        var rect = el.getBoundingClientRect();
+        var before = (e.clientX - rect.left) < rect.width / 2;
+        clearDropIndicators();
+        el.classList.add(before ? 'drop-before' : 'drop-after');
+      };
+      el.ondrop = function (e) {
+        e.preventDefault();
+        clearDropIndicators();
+        var fromId = draggedId;
+        draggedId = null;
+        if (!fromId || fromId === t.id) return;
+        var fromIdx = tabs.findIndex(function (x) { return x.id === fromId; });
+        var toIdx = tabs.findIndex(function (x) { return x.id === t.id; });
+        if (fromIdx === -1 || toIdx === -1) return;
+        var rect = el.getBoundingClientRect();
+        var before = (e.clientX - rect.left) < rect.width / 2;
+        var moved = tabs.splice(fromIdx, 1)[0];
+        var insertAt = tabs.findIndex(function (x) { return x.id === t.id; });
+        if (!before) insertAt += 1;
+        tabs.splice(insertAt, 0, moved);
+        render();
+      };
+
+      var favicon = document.createElement('img');
+      favicon.className = 'favicon';
+      favicon.src = t.favicon || GENERIC_FAVICON;
+      favicon.alt = '';
+      favicon.onerror = function () {
+        this.onerror = null;
+        this.src = GENERIC_FAVICON;
+      };
+      el.appendChild(favicon);
+
+      var label = document.createElement('span');
+      label.className = 'label';
+      label.textContent = isStartPage(t.url) ? 'Nouvel onglet' : (t.title || t.url || 'Nouvel onglet');
+      el.appendChild(label);
+
+      var close = document.createElement('span');
+      close.className = 'close';
+      close.textContent = '×';
+      close.onclick = function (e) {
+        e.stopPropagation();
+        api() && api().close_tab(t.id);
+      };
+      el.appendChild(close);
+
+      elTabs.appendChild(el);
+    });
+
+    var active = tabs.find(function (t) { return t.id === activeId; });
+    elEmpty.style.display = active ? 'none' : 'flex';
+    elAddress.value = active ? (isStartPage(active.url) ? '' : (active.url || '')) : '';
+    elBack.disabled = !active || !active.canGoBack;
+    elForward.disabled = !active || !active.canGoForward;
+    elViewMobile.disabled = !active;
+    elViewDesktop.disabled = !active;
+    elViewMobile.classList.toggle('active', !!(active && active.device));
+    elViewDesktop.classList.toggle('active', !!active && !active.device);
+  }
+
+  // Python pushes the full tab list keyed by insertion order in its own
+  // dict, which knows nothing about drag-and-drop reordering done here --
+  // merging by id onto the existing on-screen order (instead of just
+  // replacing `tabs` outright) means a title/favicon update on any tab
+  // (frequent -- every nav/title/favicon change pushes all tabs) doesn't
+  // silently snap a manually reordered strip back to backend order.
+  function mergeTabs(newTabs) {
+    var byId = {};
+    newTabs.forEach(function (t) { byId[t.id] = t; });
+    var merged = [];
+    tabs.forEach(function (t) {
+      if (byId[t.id]) {
+        merged.push(byId[t.id]);
+        delete byId[t.id];
+      }
+    });
+    newTabs.forEach(function (t) {
+      if (byId[t.id]) merged.push(t);
+    });
+    return merged;
+  }
+
+  document.getElementById('new-tab').onclick = function () {
+    api() && api().new_tab('', null);
+  };
+  document.getElementById('btn-min').onclick = function () { api() && api().minimize_window(); };
+  document.getElementById('btn-max').onclick = function () { api() && api().toggle_maximize_window(); };
+  document.getElementById('btn-close').onclick = function () { api() && api().close_window(); };
+  document.getElementById('titlebar').ondblclick = function (e) {
+    if (e.target.id === 'titlebar' || e.target.id === 'tabs') {
+      api() && api().toggle_maximize_window();
+    }
+  };
+
+  elBack.onclick = function () { activeId && api() && api().go_back(activeId); };
+  elForward.onclick = function () { activeId && api() && api().go_forward(activeId); };
+  elReload.onclick = function () { activeId && api() && api().reload(activeId); };
+  // Two-button device toggle (mobile/bureau) instead of a full emulation
+  // panel -- reuses the same backend set_device_emulation() as before,
+  // just with one fixed preset rather than a picker.
+  elViewMobile.onclick = function () { activeId && api() && api().set_device_emulation(activeId, 'iphone14'); };
+  elViewDesktop.onclick = function () { activeId && api() && api().set_device_emulation(activeId, null); };
+
+  // --- Address bar suggestions ---
+  var elSuggestions = document.getElementById('address-suggestions');
+  var suggestionItems = [];
+  var suggestionActiveIndex = -1;
+  var suggestionTimer = null;
+
+  function closeSuggestions() {
+    var wasOpen = elSuggestions.classList.contains('open');
+    elSuggestions.classList.remove('open');
+    elSuggestions.innerHTML = '';
+    suggestionItems = [];
+    suggestionActiveIndex = -1;
+    // #address-suggestions occupies real layout space (see its CSS
+    // comment) -- closing it changes #content-area's rect, so the native
+    // tab-content control needs repositioning same as opening it does.
+    if (wasOpen) reportContentRect();
+  }
+
+  var SEARCH_ICON = 'data:image/svg+xml,' + encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#8b8b93" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+    '<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>'
+  );
+
+  function renderSuggestions(items) {
+    suggestionItems = items || [];
+    suggestionActiveIndex = -1;
+    elSuggestions.innerHTML = '';
+    if (!suggestionItems.length) {
+      closeSuggestions();
+      return;
+    }
+    suggestionItems.forEach(function (item, i) {
+      var row = document.createElement('div');
+      row.className = 'suggestion-row';
+      row.onmousedown = function (e) {
+        // mousedown (not click) fires before the input's blur handler,
+        // so the dropdown is still in the DOM when this runs.
+        e.preventDefault();
+        navigateToSuggestion(item);
+      };
+      row.onmouseenter = function () { setSuggestionActive(i); };
+
+      var img = document.createElement('img');
+      img.src = item.type === 'search' ? SEARCH_ICON : (item.favicon || GENERIC_FAVICON);
+      img.alt = '';
+      img.onerror = function () { this.onerror = null; this.src = GENERIC_FAVICON; };
+      row.appendChild(img);
+
+      if (item.type === 'search') {
+        var text = document.createElement('span');
+        text.className = 's-title';
+        text.style.maxWidth = 'none';
+        text.textContent = item.text;
+        row.appendChild(text);
+      } else {
+        var title = document.createElement('span');
+        title.className = 's-title';
+        title.textContent = item.title || item.url;
+        row.appendChild(title);
+
+        var url = document.createElement('span');
+        url.className = 's-url';
+        url.textContent = item.url;
+        row.appendChild(url);
+      }
+
+      elSuggestions.appendChild(row);
+    });
+    elSuggestions.classList.add('open');
+    reportContentRect();
+  }
+
+  function setSuggestionActive(index) {
+    suggestionActiveIndex = index;
+    var rows = elSuggestions.querySelectorAll('.suggestion-row');
+    rows.forEach(function (r, i) { r.classList.toggle('active', i === index); });
+  }
+
+  function navigateToSuggestion(item) {
+    closeSuggestions();
+    if (!activeId) return;
+    if (item.type === 'search') {
+      var url = 'https://www.google.com/search?q=' + encodeURIComponent(item.text);
+      elAddress.value = url;
+      api() && api().navigate(activeId, url);
+    } else {
+      elAddress.value = item.url;
+      api() && api().navigate(activeId, item.url);
+    }
+  }
+
+  elAddress.addEventListener('input', function () {
+    var query = elAddress.value.trim();
+    clearTimeout(suggestionTimer);
+    if (!query || !api() || !api().search_suggestions) {
+      closeSuggestions();
+      return;
+    }
+    // A bit longer than the pure-local history lookup this replaces --
+    // this now also makes a real web request (Google's suggest API) each
+    // time it fires, so debouncing harder cuts down on requests made
+    // while the user is still mid-word.
+    suggestionTimer = setTimeout(function () {
+      api().search_suggestions(query).then(function (results) {
+        if (elAddress.value.trim() === query) renderSuggestions(results);
+      });
+    }, 200);
+  });
+
+  elAddress.addEventListener('blur', function () {
+    // onmousedown above already handled a click before this fires.
+    setTimeout(closeSuggestions, 100);
+  });
+
+  elAddress.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') {
+      closeSuggestions();
+      return;
+    }
+    if (elSuggestions.classList.contains('open') && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      var next = suggestionActiveIndex + (e.key === 'ArrowDown' ? 1 : -1);
+      if (next < 0) next = suggestionItems.length - 1;
+      if (next >= suggestionItems.length) next = 0;
+      setSuggestionActive(next);
+      return;
+    }
+    if (e.key === 'Enter' && activeId) {
+      if (suggestionActiveIndex >= 0 && suggestionItems[suggestionActiveIndex]) {
+        navigateToSuggestion(suggestionItems[suggestionActiveIndex]);
+        return;
+      }
+      closeSuggestions();
+      api() && api().navigate(activeId, elAddress.value.trim());
+    }
+  });
+
+  function reportContentRect() {
+    var el = document.getElementById('content-area');
+    var rect = el.getBoundingClientRect();
+    api() && api().report_content_rect({
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    });
+  }
+
+  var resizeTimer = null;
+  window.addEventListener('resize', function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(reportContentRect, 60);
+  });
+
+  // Python -> JS: full tab list + which one is active.
+  window.__browserOnTabsChanged = function (newTabs, newActiveId) {
+    tabs = mergeTabs(newTabs || []);
+    activeId = newActiveId;
+    render();
+  };
+
+  // Mirrors Dev Hub's current theme instead of hardcoding one of its ~30
+  // palettes here — vars come from the main window's own resolved
+  // --color-* custom properties (see BrowserWindowApi.get_theme in
+  // main.py), so this stays correct as themes are added/changed there.
+  function applyTheme(vars) {
+    if (!vars) return;
+    Object.keys(vars).forEach(function (k) {
+      if (vars[k]) document.documentElement.style.setProperty('--' + k, vars[k]);
+    });
+  }
+  window.__browserOnTheme = applyTheme;
+
+  // F11/Escape are handled natively (backend/_f11_fullscreen_watch), same
+  // mechanism as Dev Hub's main window — hiding this window's own tab
+  // strip/toolbar is the part only this page can do. Hiding those changes
+  // #content-area's size without changing the actual window size, so the
+  // resize listener below never fires on its own — report the new rect
+  // directly instead of waiting for it.
+  window.addEventListener('devhub-fullscreen', function (e) {
+    document.getElementById('app').classList.toggle('fullscreen', !!e.detail);
+    reportContentRect();
+  });
+
+  window.addEventListener('pywebviewready', function () {
+    reportContentRect();
+    // The first tab is opened by Python right after this window is
+    // created, which can race this page's own load — pull the current
+    // state once ready instead of relying only on the push update.
+    if (api() && api().get_tabs) {
+      api().get_tabs().then(function (res) {
+        if (!res) return;
+        tabs = mergeTabs(res.tabs || []);
+        activeId = res.active_id;
+        render();
+      });
+    }
+    if (api() && api().get_theme) {
+      api().get_theme().then(applyTheme);
+    }
+  });
+})();
+</script>
+</body>
+</html>

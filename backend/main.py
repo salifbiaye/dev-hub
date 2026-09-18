@@ -1,7 +1,9 @@
+import base64
 import ctypes
 import ctypes.wintypes as wintypes
 import fnmatch
 import json
+import mimetypes
 import os
 import re
 import shlex
@@ -16,7 +18,8 @@ import urllib.parse
 import urllib.request
 import uuid
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import webview
@@ -38,16 +41,37 @@ import win32process
 # forces WebView2's underlying Chromium to always bypass the proxy for
 # loopback addresses. Must be set before webview.start() creates the
 # WebView2 environment, so it's done at import time here.
-os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", "--proxy-bypass-list=localhost;127.0.0.1;<local>")
+#
+# This env var is only reliably picked up by an environment that doesn't
+# also set its own CreationProperties.AdditionalBrowserArguments
+# explicitly -- the browser window's tab-content controls do (see
+# _PROXY_BYPASS_ARG below), so they need the same bypass folded into that
+# explicit string themselves, or they'd silently lose this protection even
+# though the env var is set.
+_PROXY_BYPASS_ARG = "--proxy-bypass-list=localhost;127.0.0.1;<local>"
+os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", _PROXY_BYPASS_ARG)
 
 APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DevHub"
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = APP_DATA_DIR / "config.json"
 
-APP_VERSION = "0.2.3"
+APP_VERSION = "0.3.0"
 GITHUB_REPO = "salifbiaye/dev-hub"
 
 KNOWN_IDES = ["webstorm", "idea1", "pycharm", "code", "rider", "goland", "clion", "phpstorm"]
+
+# Directories the Code tab's file tree never descends into — not a
+# .gitignore mirror (that would also hide .env and other files people
+# actually want to browse), just the handful of folders that are always
+# noise and can blow up to tens of thousands of entries.
+CODE_BROWSER_SKIP_DIRS = {
+    # Kept intentionally short — "build"/"dist"/"out" etc. used to be on
+    # this list too, but people legitimately want to browse build output;
+    # only VCS internals and dependency caches that are both never useful
+    # to browse AND can genuinely reach tens of thousands of files stay
+    # excluded.
+    ".git", "node_modules", "__pycache__", ".venv", "venv",
+}
 
 # Mirrors --color-accent for every theme in frontend/src/index.css, so the
 # taskbar icon can be recolored to match instead of staying a fixed purple
@@ -770,78 +794,881 @@ def _stream_run_terminal(path, name, terminal_id, proc):
         pass
 
 
-# Local proxy that re-serves a page without its anti-framing headers, so the
-# Processus preview pane can display sites that set X-Frame-Options or
-# CSP frame-ancestors. Only the top-level HTML document goes through here —
-# sub-resources load straight from the origin (they're never frame-blocked),
-# which a injected <base href> takes care of.
-_proxy_server = None
-_proxy_port = None
-_STRIPPED_HEADERS = {"x-frame-options", "content-security-policy", "content-security-policy-report-only"}
 
 
-class _ProxyHandler(BaseHTTPRequestHandler):
+class _QuietHTTPHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args):
-        pass  # keep the app's stdout clean
+        pass  # keep the app's stdout clean, same as _ProxyHandler
 
-    def do_GET(self):
-        parsed = urllib.parse.urlparse(self.path)
-        target = urllib.parse.parse_qs(parsed.query).get("url", [None])[0]
-        if not target:
-            self.send_error(400, "missing url")
-            return
-        if urllib.parse.urlparse(target).scheme not in ("http", "https"):
-            # Refuse file:// and friends — this listens on localhost but there
-            # is no reason for it to read the disk.
-            self.send_error(400, "unsupported scheme")
-            return
+    def end_headers(self):
+        # The main window's WebView2 profile is ephemeral (pywebview's
+        # default private mode), so it never noticed this, but the browser
+        # window's tabs deliberately use a *persistent* profile
+        # (_browser_profile_dir) so logins survive app restarts — and
+        # SimpleHTTPRequestHandler sends no Cache-Control at all, so that
+        # persistent profile can go on serving a stale cached
+        # browser.html/start.html from disk after a rebuild instead of
+        # re-fetching. Every asset here is either generated fresh per
+        # request or rebuilt as a whole on each `npm run build`, so there's
+        # never a reason to let anything from this server be cached.
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
 
+
+def _serve_own_ui(dist_dir):
+    # Dev Hub's own UI used to load from a file:// path. A Processus
+    # preview iframe pointing at a local dev server (http://localhost:X)
+    # is then a *cross-site* embed relative to that file:// top-level page
+    # (no registrable domain in common at all), so Chromium/WebView2 treats
+    # its cookies as third-party and isolates/drops them — a login that
+    # works fine in a real browser tab can silently fail to "stick" inside
+    # the iframe. Serving Dev Hub itself over http://127.0.0.1 instead
+    # doesn't make it literally the same origin as the previewed app, but
+    # both are under the `localhost`/loopback site, so the iframe becomes
+    # same-site instead of cross-site and stops being subject to that
+    # isolation.
+    handler = partial(_QuietHTTPHandler, directory=str(dist_dir))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    port = server.server_address[1]
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return port
+
+
+# Dev Hub's own browser — a single genuine top-level pywebview window (no
+# iframe/X-Frame-Options/cookie-partitioning restrictions at all), whose
+# own WebView2 renders a standalone chrome page (frontend/public/browser.html:
+# tab strip + address bar). Each tab's actual content is a *separate*
+# WebView2 .NET control BrowserWindowApi adds directly to that window's
+# Form (see _get_form), positioned under the chrome and shown/hidden by
+# toggling .Visible — never destroyed on tab switch, so every open tab
+# keeps running in the background exactly like a real browser tab.
+#
+# Two simpler designs were tried first and both had real WebView2/WinForms
+# failure modes, confirmed independently:
+#   - One top-level window per tab, created on demand: pywebview *can*
+#     create windows after start() (it marshals the call onto the GUI
+#     thread via Control.Invoke), but on the WinForms/WebView2 backend
+#     this can stall the GUI thread long enough for Windows to report the
+#     whole app as hung (confirmed via Event Viewer — "Application Hang"
+#     for DevHub.exe right after clicking Ouvrir).
+#   - A pool of windows pre-created hidden at startup to dodge that:
+#     WebView2 initialized while a window has never actually been shown
+#     renders permanently black afterwards, even after Show()/resize —
+#     a documented WebView2 limitation (MicrosoftEdge/WebView2Feedback
+#     #1077, #2983), not something fixable from pywebview's own API.
+# Adding child WebView2 *controls* to a Form that's already genuinely
+# shown sidesteps both: only one dynamic create_window() call ever
+# happens (the chrome window itself), and no control is ever initialized
+# while hidden.
+_browser_window = None
+_browser_api = None
+_own_ui_base = None
+# Guards window creation below — open_browser_tab() runs on a fresh
+# background thread per call (pywebview spawns one per JS-API call), so
+# two "Ouvrir" clicks close together could otherwise both see
+# _browser_window as None and each create their own top-level window.
+_browser_window_lock = threading.Lock()
+
+
+def _preview_window_geometry():
+    # If the main window is maximized (its width == the full screen width,
+    # which is the common case), "just to its right" lands past the right
+    # edge of the display — the window was created fine but sat entirely
+    # off-screen, unreachable and looking like nothing happened at all.
+    # Clamped against the actual screen size so it always lands visible,
+    # overlapping the main window if there's genuinely no room beside it.
+    screen_w, screen_h = 1920, 1080
+    try:
+        screens = webview.screens
+        if screens:
+            screen_w, screen_h = screens[0].width, screens[0].height
+    except Exception:
+        pass
+
+    width, height = 900, 700
+    x, y = 100, 100
+    try:
+        main = webview.windows[0]
+        x, y, height = main.x + main.width, main.y, main.height
+    except Exception:
+        pass
+
+    x = max(0, min(x, screen_w - width))
+    y = max(0, min(y, screen_h - height))
+    return x, y, width, height
+
+
+def _browser_profile_dir():
+    d = APP_DATA_DIR / "browser_profile"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+_THEME_VAR_NAMES = [
+    "base", "surface", "surface-hover", "border", "border-strong",
+    "text", "muted", "accent", "accent-hover", "danger",
+]
+
+
+def _read_theme_vars():
+    keys_js = json.dumps(_THEME_VAR_NAMES)
+    script = (
+        f"(function(){{var s=getComputedStyle(document.documentElement);"
+        f"var keys={keys_js};var out={{}};"
+        f"keys.forEach(function(k){{out[k]=s.getPropertyValue('--color-'+k).trim();}});"
+        f"return out;}})()"
+    )
+    try:
+        result = webview.windows[0].evaluate_js(script)
+        return result or {}
+    except Exception:
+        return {}
+
+
+def _is_start_page(url):
+    return bool(url) and "/start.html" in url
+
+
+def _browser_history_path():
+    return APP_DATA_DIR / "browser_history.json"
+
+
+def _load_browser_history():
+    try:
+        return json.loads(_browser_history_path().read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_browser_history(data):
+    try:
+        _browser_history_path().write_text(json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _record_visit(url, title=None, favicon=None, increment=True):
+    # Powers the "frequent sites" cards on the new-tab page — counts how
+    # often a URL is opened (not every in-page navigation within it), so
+    # this is only ever called when a tab is first pointed at a real URL,
+    # plus once more (increment=False) to backfill the favicon once it
+    # arrives, which is normally still unknown at that first moment.
+    if not url or _is_start_page(url):
+        return
+    data = _load_browser_history()
+    entry = data.get(url) or {"count": 0, "title": url, "favicon": None}
+    if increment:
+        entry["count"] = entry.get("count", 0) + 1
+    if title:
+        entry["title"] = title
+    if favicon:
+        entry["favicon"] = favicon
+    data[url] = entry
+    _save_browser_history(data)
+
+
+def _top_frequent_sites(n=4):
+    data = _load_browser_history()
+    items = sorted(data.items(), key=lambda kv: kv[1].get("count", 0), reverse=True)[:n]
+    return [{"url": u, "title": v.get("title") or u, "favicon": v.get("favicon")} for u, v in items]
+
+
+def _start_page_url():
+    if not _own_ui_base:
+        return None
+    query = urllib.parse.urlencode({
+        "theme": json.dumps(_read_theme_vars()),
+        "favs": json.dumps(_top_frequent_sites(4)),
+    })
+    return f"{_own_ui_base}/start.html?{query}"
+
+
+def _push_theme_to_browser_window():
+    # Called from set_theme() right after the main window's own theme
+    # switch, on its own thread — a tiny wait lets that switch's
+    # data-theme attribute actually land before this reads computed
+    # styles back off it.
+    time.sleep(0.15)
+    if _browser_window is None:
+        return
+    vars_json = json.dumps(_read_theme_vars())
+    try:
+        _browser_window.evaluate_js(f"window.__browserOnTheme && window.__browserOnTheme({vars_json})")
+    except Exception:
+        pass
+    # The chrome (browser.html) picks this up via the call above, but a
+    # start.html tab has its own separate WebView2 control with no js_api
+    # bridge at all — it only ever read the theme once, baked into its
+    # query string at open time. Without this it stays on whatever theme
+    # was active when it was opened until the tab is closed and reopened.
+    if _browser_api is not None:
+        _browser_api.push_theme_to_start_tabs(vars_json)
+
+
+def _normalize_url(url):
+    url = (url or "").strip()
+    if not url:
+        return None
+    if "://" in url or url.startswith("about:") or url.startswith("data:"):
+        return url
+    if url.startswith("localhost") or re.match(r"^\d+\.\d+\.\d+\.\d+", url):
+        return f"http://{url}"
+    return f"https://{url}"
+
+
+# Dimensions/UA strings mirror Chrome DevTools' own built-in device list
+# (the reference the feature request pointed at) closely enough for
+# responsive-layout and UA-sniffing testing purposes -- exact browser point
+# version in the UA string doesn't need to be current, just plausible.
+_DEVICE_PRESETS = {
+    "iphone14": {
+        "label": "iPhone 14", "width": 390, "height": 844,
+        "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 "
+              "(KHTML, like Gecko) CriOS/105.0.5195.100 Mobile/15E148 Safari/604.1",
+    },
+    "iphonese": {
+        "label": "iPhone SE", "width": 375, "height": 667,
+        "ua": "Mozilla/5.0 (iPhone; CPU iPhone OS 15_4 like Mac OS X) AppleWebKit/605.1.15 "
+              "(KHTML, like Gecko) CriOS/100.0.4896.75 Mobile/15E148 Safari/604.1",
+    },
+    "ipad": {
+        "label": "iPad", "width": 820, "height": 1180,
+        "ua": "Mozilla/5.0 (iPad; CPU OS 16_0 like Mac OS X) AppleWebKit/605.1.15 "
+              "(KHTML, like Gecko) CriOS/105.0.5195.100 Mobile/15E148 Safari/604.1",
+    },
+    "pixel7": {
+        "label": "Pixel 7", "width": 412, "height": 915,
+        "ua": "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/105.0.0.0 Mobile Safari/537.36",
+    },
+}
+
+class BrowserWindowApi:
+    """js_api for the standalone Navigateur window — see the module-level
+    comment above _browser_window for why tab content lives as raw WebView2
+    controls instead of separate pywebview windows."""
+
+    def __init__(self, win):
+        self._win = win
+        self._form = None
+        self._tabs = {}  # tab_id -> {"control", "url", "title"}
+        self._active_id = None
+        self._content_rect = None
+        self._maximized = False
+
+    def _tab_payload_list(self):
+        # CanGoBack/CanGoForward come from the live CoreWebView2 object —
+        # read them all in one form.Invoke round trip rather than per-tab,
+        # since this runs on every tab-list push (frequent: every nav,
+        # title, and favicon change).
+        from System import Func, Type
+
+        can_go = {}
+        form = self._get_form()
+
+        def _read():
+            for tid, t in self._tabs.items():
+                control = t.get("control")
+                try:
+                    core = control.CoreWebView2 if control is not None else None
+                    can_go[tid] = (bool(core.CanGoBack), bool(core.CanGoForward)) if core else (False, False)
+                except Exception:
+                    can_go[tid] = (False, False)
+
+        if form is not None:
+            form.Invoke(Func[Type](_read))
+        else:
+            _read()
+
+        return [
+            {
+                "id": tid,
+                "title": t["title"] or t["url"] or "Nouvel onglet",
+                "url": t["url"],
+                "favicon": t.get("favicon"),
+                "device": t.get("device"),
+                "device_label": t.get("device_label"),
+                "device_w": t.get("device_w"),
+                "device_h": t.get("device_h"),
+                "device_ua": t.get("device_ua"),
+                "canGoBack": can_go.get(tid, (False, False))[0],
+                "canGoForward": can_go.get(tid, (False, False))[1],
+            }
+            for tid, t in self._tabs.items()
+        ]
+
+    def get_tabs(self):
+        # Pulled once by browser.html on pywebviewready — the initial
+        # new_tab() call happens immediately after create_window() returns,
+        # which can race the chrome page's own load, so its first paint
+        # can't rely solely on the push in _push_tabs().
+        return {"tabs": self._tab_payload_list(), "active_id": self._active_id}
+
+    def get_theme(self):
+        # Mirrors whatever the main window's CSS currently resolves to,
+        # rather than duplicating Dev Hub's ~30 theme palettes here —
+        # automatically stays correct as themes are added/changed.
+        return _read_theme_vars()
+
+    def search_history(self, query):
+        # Backs the address bar's suggestion dropdown — reuses the same
+        # history file _top_frequent_sites reads for the new-tab cards,
+        # just matched against the typed text instead of sorted by count.
+        query = (query or "").strip().lower()
+        if not query:
+            return []
+        data = _load_browser_history()
+        matches = [
+            {"url": u, "title": v.get("title") or u, "favicon": v.get("favicon")}
+            for u, v in data.items()
+            if query in u.lower() or query in (v.get("title") or "").lower()
+        ]
+        matches.sort(key=lambda m: data[m["url"]].get("count", 0), reverse=True)
+        return matches[:6]
+
+    def search_suggestions(self, query):
+        # Combines local history matches with live web search-completion
+        # suggestions (like a real browser's address bar) -- history first
+        # (instant, most relevant to this user), search completions after.
+        query = (query or "").strip()
+        if not query:
+            return []
+        history = self.search_history(query)[:4]
+        for m in history:
+            m["type"] = "history"
+
+        completions = []
         try:
-            req = urllib.request.Request(
-                target,
-                headers={
-                    "User-Agent": self.headers.get("User-Agent", "Mozilla/5.0"),
-                    "Accept": self.headers.get("Accept", "text/html"),
-                    # No gzip: we may need to rewrite the body as text.
-                    "Accept-Encoding": "identity",
-                },
+            url = "https://www.google.com/complete/search?" + urllib.parse.urlencode(
+                {"client": "firefox", "q": query}
             )
-            with urllib.request.urlopen(req, timeout=20) as resp:
-                body = resp.read()
-                content_type = resp.headers.get("Content-Type", "text/html")
-                status = resp.status
-        except urllib.error.HTTPError as e:
-            body, content_type, status = e.read(), e.headers.get("Content-Type", "text/html"), e.code
-        except Exception as e:
-            self.send_error(502, f"proxy error: {e}")
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=1.5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            for text in (data[1] if len(data) > 1 else [])[:5]:
+                if text.lower() == query.lower():
+                    continue
+                completions.append({"type": "search", "text": text})
+        except Exception:
+            pass  # offline, blocked, slow, or malformed response -- history alone is still useful
+
+        return history + completions
+
+    def push_theme_to_start_tabs(self, vars_json):
+        # start.html tabs have no js_api bridge (only browser.html itself
+        # does) — ExecuteScriptAsync lets Python push new CSS variables
+        # directly into an already-loaded page without one.
+        from System import Func, Type
+
+        form = self._get_form()
+        if form is None:
+            return
+        script = (
+            "(function(){var v=" + vars_json + ";"
+            "Object.keys(v).forEach(function(k){if(v[k])document.documentElement.style.setProperty('--'+k,v[k]);});})()"
+        )
+        for t in list(self._tabs.values()):
+            control = t.get("control")
+            if control is None or not _is_start_page(t.get("url")):
+                continue
+
+            def _do(control=control):
+                try:
+                    control.CoreWebView2.ExecuteScriptAsync(script)
+                except Exception:
+                    pass
+
+            form.Invoke(Func[Type](_do))
+
+    def _scale(self):
+        # rect coordinates come from browser.html's getBoundingClientRect(),
+        # which is in logical/CSS pixels — but Control.Bounds on a
+        # DPI-aware WinForms control expects physical pixels. Same
+        # conversion pywebview's own move()/resize() already do (see
+        # winforms.py's _scale property); skipping it here is what put the
+        # content controls at the wrong position/size on non-100% DPI
+        # displays, which read as a black screen (the form's own dark
+        # background showing through a misplaced control).
+        form = self._get_form()
+        if form is None:
+            return 1.0
+        try:
+            return ctypes.windll.user32.GetDpiForWindow(form.Handle.ToInt32()) / 96
+        except Exception:
+            return 1.0
+
+    def _scaled_rect(self, rect):
+        from System.Drawing import Rectangle
+
+        s = self._scale()
+        return Rectangle(round(rect["x"] * s), round(rect["y"] * s), round(rect["width"] * s), round(rect["height"] * s))
+
+    def _device_rect_for(self, t, rect):
+        # Letterboxes a fixed-size device viewport centered within the
+        # available content area (rather than filling it) -- clamped so a
+        # device larger than the current window (e.g. iPad on a small
+        # window) never overflows past the visible content area. Reads the
+        # dimensions straight off the tab (set by set_device_emulation)
+        # rather than re-deriving from _DEVICE_PRESETS, since a custom
+        # width/height isn't in that static dict at all.
+        dw, dh = t.get("device_w"), t.get("device_h")
+        if not dw or not dh:
+            return rect
+        dw = min(dw, rect["width"])
+        dh = min(dh, rect["height"])
+        dx = rect["x"] + max(0, (rect["width"] - dw) // 2)
+        dy = rect["y"] + max(0, (rect["height"] - dh) // 2)
+        return {"x": dx, "y": dy, "width": dw, "height": dh}
+
+    def _get_form(self):
+        if self._form is None:
+            from webview.platforms.winforms import BrowserView
+
+            self._form = BrowserView.instances.get(self._win.uid)
+        return self._form
+
+    def _push_tabs(self):
+        payload = self._tab_payload_list()
+        try:
+            self._win.evaluate_js(
+                f"window.__browserOnTabsChanged && window.__browserOnTabsChanged({json.dumps(payload)}, {json.dumps(self._active_id)})"
+            )
+        except Exception:
+            pass
+
+    def _push_tabs_async(self):
+        # Use from .NET event handlers (NavigationCompleted, DocumentTitleChanged)
+        # — those fire synchronously on the GUI thread, and evaluate_js()
+        # blocks waiting for a continuation delivered through that same
+        # thread's message loop, which can't advance while it's the one
+        # blocking. Running it off-thread avoids that self-deadlock (the
+        # same one that was hit and fixed for the old per-tab window's
+        # closing handler).
+        threading.Thread(target=self._push_tabs, daemon=True).start()
+
+    def _with_control(self, tab_id, fn):
+        from System import Func, Type
+
+        form = self._get_form()
+        t = self._tabs.get(tab_id)
+        if not form or not t or not t.get("control"):
             return
 
-        if "text/html" in content_type.lower():
-            base = f"{urllib.parse.urlparse(target).scheme}://{urllib.parse.urlparse(target).netloc}"
-            tag = f'<base href="{base}/">'.encode()
-            lowered = body.lower()
-            head = lowered.find(b"<head")
-            if head != -1:
-                insert = lowered.find(b">", head) + 1
-                body = body[:insert] + tag + body[insert:]
+        def _do():
+            try:
+                fn(t["control"])
+            except Exception:
+                pass
+
+        form.Invoke(Func[Type](_do))
+
+    def new_tab(self, url=None, title=None):
+        from System import Func, Type
+
+        form = self._get_form()
+        if form is None:
+            return {"error": "Fenêtre navigateur indisponible"}
+
+        tab_id = str(uuid.uuid4())
+        target_url = _normalize_url(url)
+        if not target_url:
+            target_url = _start_page_url()
+        else:
+            _record_visit(target_url, title)
+        self._tabs[tab_id] = {
+            "control": None,
+            "url": target_url or "",
+            "title": title or "",
+            "favicon": None,
+        }
+
+        def _create():
+            from Microsoft.Web.WebView2.WinForms import CoreWebView2CreationProperties, WebView2
+            from System import Uri
+            from System.Drawing import Color
+
+            control = WebView2()
+            props = CoreWebView2CreationProperties()
+            props.UserDataFolder = str(_browser_profile_dir())
+            props.AdditionalBrowserArguments = _PROXY_BYPASS_ARG
+            control.CreationProperties = props
+            # WebView2 paints white until the page's first frame arrives —
+            # against Dev Hub's dark chrome that's a bright flash every
+            # time a tab opens. Matches the window's own background_color.
+            control.DefaultBackgroundColor = Color.FromArgb(255, 0x0A, 0x0A, 0x0C)
+            rect = self._content_rect or {"x": 0, "y": 74, "width": 900, "height": 626}
+            control.Bounds = self._scaled_rect(rect)
+
+            def _on_nav_completed(sender, args):
+                t = self._tabs.get(tab_id)
+                if t is not None:
+                    try:
+                        t["url"] = str(control.Source)
+                    except Exception:
+                        pass
+                self._push_tabs_async()
+
+            def _on_core_ready(sender, args):
+                try:
+                    def _on_title_changed(s, a):
+                        t = self._tabs.get(tab_id)
+                        if t is not None:
+                            try:
+                                t["title"] = control.CoreWebView2.DocumentTitle
+                            except Exception:
+                                pass
+                        self._push_tabs_async()
+
+                    def _on_favicon_changed(s, a):
+                        # FaviconUri is a plain URL (usually the site's own
+                        # http(s) favicon URL) -- handing that straight to
+                        # browser.html's <img src> lets its WebView2 fetch
+                        # it independently instead of us shuttling bytes
+                        # through GetFaviconAsync/JSON, which would need its
+                        # own .NET Task continuation plumbing for little
+                        # benefit here.
+                        t = self._tabs.get(tab_id)
+                        if t is not None:
+                            try:
+                                t["favicon"] = control.CoreWebView2.FaviconUri or None
+                                _record_visit(t["url"], favicon=t["favicon"], increment=False)
+                            except Exception:
+                                pass
+                        self._push_tabs_async()
+
+                    control.CoreWebView2.DocumentTitleChanged += _on_title_changed
+                    control.CoreWebView2.FaviconChanged += _on_favicon_changed
+
+                    # Off by default for WebView2 (unlike a normal Edge/
+                    # Chrome profile) — without this a login form just
+                    # submits with no "Enregistrer le mot de passe ?"
+                    # prompt and no autofill dropdown on return visits.
+                    settings = control.CoreWebView2.Settings
+                    try:
+                        settings.IsPasswordAutosaveEnabled = True
+                    except Exception:
+                        pass
+                    try:
+                        settings.IsGeneralAutofillEnabled = True
+                    except Exception:
+                        pass
+                    try:
+                        # The default WebView2 offline/connection-refused
+                        # page carries visible "Microsoft Edge" branding —
+                        # jarring inside a window meant to look like Dev
+                        # Hub's own browser. Disabling it just leaves a
+                        # blank page on a failed navigation instead.
+                        settings.IsBuiltInErrorPageEnabled = False
+                    except Exception:
+                        pass
+                    try:
+                        # Captured once, before any device-emulation
+                        # override — set_device_emulation()'s "Desktop"
+                        # reset restores this exact string rather than
+                        # trying to "unset" UserAgent (there's no distinct
+                        # empty/default sentinel value for it).
+                        t = self._tabs.get(tab_id)
+                        if t is not None and "default_ua" not in t:
+                            t["default_ua"] = settings.UserAgent
+                    except Exception:
+                        pass
+
+                except Exception:
+                    pass
+
+            control.NavigationCompleted += _on_nav_completed
+            control.CoreWebView2InitializationCompleted += _on_core_ready
+
+            form.Controls.Add(control)
+            for t in self._tabs.values():
+                if t["control"] is not None:
+                    t["control"].Visible = False
+            control.Visible = True
+            control.BringToFront()
+            if target_url:
+                control.Source = Uri(target_url)
+            self._tabs[tab_id]["control"] = control
+
+        form.Invoke(Func[Type](_create))
+        self._active_id = tab_id
+        self._push_tabs()
+        return {"ok": True, "tab_id": tab_id}
+
+    def switch_tab(self, tab_id):
+        from System import Func, Type
+
+        form = self._get_form()
+        if form is None or tab_id not in self._tabs:
+            return {"error": "Onglet introuvable"}
+
+        def _do():
+            for tid, t in self._tabs.items():
+                if t["control"] is not None:
+                    t["control"].Visible = tid == tab_id
+            if self._tabs[tab_id]["control"] is not None:
+                self._tabs[tab_id]["control"].BringToFront()
+
+        form.Invoke(Func[Type](_do))
+        self._active_id = tab_id
+        self._push_tabs()
+        return {"ok": True}
+
+    def close_tab(self, tab_id):
+        from System import Func, Type
+
+        form = self._get_form()
+        t = self._tabs.pop(tab_id, None)
+        if t and form is not None and t.get("control") is not None:
+            control = t["control"]
+
+            def _do():
+                try:
+                    form.Controls.Remove(control)
+                    control.Dispose()
+                except Exception:
+                    pass
+
+            form.Invoke(Func[Type](_do))
+
+        if self._active_id == tab_id:
+            remaining = list(self._tabs.keys())
+            self._active_id = remaining[-1] if remaining else None
+            if self._active_id:
+                self.switch_tab(self._active_id)
+                return {"ok": True}
+
+        if not self._tabs:
+            try:
+                self._win.hide()
+            except Exception:
+                pass
+
+        self._push_tabs()
+        return {"ok": True}
+
+    def navigate(self, tab_id, url):
+        from System import Uri
+
+        target = _normalize_url(url)
+        if not target:
+            return {"ok": True}
+        self._with_control(tab_id, lambda c: setattr(c, "Source", Uri(target)))
+        t = self._tabs.get(tab_id)
+        if t is not None:
+            t["url"] = target
+        return {"ok": True}
+
+    def go_back(self, tab_id):
+        self._with_control(tab_id, lambda c: c.CoreWebView2 and c.CoreWebView2.GoBack())
+        return {"ok": True}
+
+    def go_forward(self, tab_id):
+        self._with_control(tab_id, lambda c: c.CoreWebView2 and c.CoreWebView2.GoForward())
+        return {"ok": True}
+
+    def reload(self, tab_id):
+        # start.html bakes the theme into its own query string at the
+        # moment the tab opens (it has no js_api bridge to ask for a fresh
+        # one itself) — a plain Reload() replays that same stale URL, so a
+        # theme changed since then would revert on refresh. Re-navigating
+        # to a freshly-built URL fixes that; every other page just reloads
+        # as normal.
+        t = self._tabs.get(tab_id)
+        if t is not None and _is_start_page(t.get("url")):
+            self.navigate(tab_id, _start_page_url())
+        else:
+            self._with_control(tab_id, lambda c: c.Reload())
+        return {"ok": True}
+
+    def report_content_rect(self, rect):
+        from System import Func, Type
+
+        self._content_rect = rect
+        form = self._get_form()
+        if form is None:
+            return {"ok": True}
+
+        def _do():
+            for t in self._tabs.values():
+                if t["control"] is not None:
+                    t["control"].Bounds = self._scaled_rect(self._device_rect_for(t, rect))
+
+        form.Invoke(Func[Type](_do))
+        return {"ok": True}
+
+    def set_device_emulation(self, tab_id, device, width=None, height=None):
+        from System import Func, Type
+
+        form = self._get_form()
+        t = self._tabs.get(tab_id)
+        if form is None or not t or t.get("control") is None:
+            return {"error": "Onglet introuvable"}
+
+        control = t["control"]
+        rect = self._content_rect or {"x": 0, "y": 74, "width": 900, "height": 626}
+
+        w = h = ua = label = None
+        if device == "custom":
+            try:
+                w = max(200, min(2000, int(width)))
+                h = max(200, min(2000, int(height)))
+            except (TypeError, ValueError):
+                return {"error": "Dimensions invalides"}
+            label = "Personnalisé"
+            # A custom size is purely a viewport test -- it doesn't force
+            # its own UA the way a named preset does, it just keeps
+            # whatever UA is already active (a preset's, or the real one).
+            ua = t.get("device_ua") or t.get("default_ua")
+        else:
+            preset = _DEVICE_PRESETS.get(device) if device else None
+            if preset:
+                w, h, ua, label = preset["width"], preset["height"], preset["ua"], preset["label"]
             else:
-                body = tag + body
+                device = None
+                ua = t.get("default_ua")
 
-        self.send_response(status)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        def _do():
+            try:
+                core = control.CoreWebView2
+            except Exception:
+                core = None
+            if core is not None and ua:
+                try:
+                    core.Settings.UserAgent = ua
+                except Exception:
+                    pass
+
+            t["device"] = device
+            t["device_w"] = w
+            t["device_h"] = h
+            t["device_label"] = label
+            t["device_ua"] = ua
+            control.Bounds = self._scaled_rect(self._device_rect_for(t, rect))
+
+            if core is not None:
+                # A UA change only affects the *next* navigation/reload --
+                # without this, the page a user was already looking at
+                # keeps whatever UA-dependent markup the server sent on
+                # its original (pre-emulation) request.
+                try:
+                    core.Reload()
+                except Exception:
+                    pass
+
+        form.Invoke(Func[Type](_do))
+        self._push_tabs()
+        return {"ok": True, "device": t.get("device"), "width": w, "height": h}
+
+    def minimize_window(self):
+        self._win.minimize()
+        return {"ok": True}
+
+    def toggle_maximize_window(self):
+        if self._maximized:
+            self._win.restore()
+            self._maximized = False
+        else:
+            self._win.maximize()
+            self._maximized = True
+        return {"ok": True, "maximized": self._maximized}
+
+    def close_window(self):
+        self._win.destroy()
+        return {"ok": True}
 
 
-def _ensure_proxy():
-    global _proxy_server, _proxy_port
-    if _proxy_server:
-        return _proxy_port
-    _proxy_server = ThreadingHTTPServer(("127.0.0.1", 0), _ProxyHandler)
-    _proxy_port = _proxy_server.server_address[1]
-    threading.Thread(target=_proxy_server.serve_forever, daemon=True).start()
-    return _proxy_port
+def _apply_browser_window_icon(win, theme):
+    # Mirrors _apply_window_icon() below for the main window, but targeted
+    # at this specific secondary window (webview.windows[0] there would be
+    # the wrong window). No retry loop: unlike at app startup, this window
+    # is created well after webview.start()'s message loop is already
+    # pumping, and BrowserWindowApi.new_tab()/other methods already rely on
+    # BrowserView.instances.get(win.uid) resolving synchronously right
+    # after create_window() returns for secondary windows on this platform.
+    try:
+        from webview.platforms.winforms import BrowserView
+        from System import Func, Type
+        from System.Drawing import Icon as NetIcon
+
+        form = BrowserView.instances.get(win.uid)
+        if not form:
+            return
+        ico_path = _theme_icon_path(THEME_ACCENTS.get(theme, THEME_ACCENTS["dark"]))
+
+        # Runs from open_browser_tab()'s per-call background thread, not the
+        # GUI thread -- .Icon is a real WinForms Control property, so (like
+        # _apply_window_icon below) it needs Invoke to marshal onto the UI
+        # thread instead of mutating the Form cross-thread.
+        def _set_icon():
+            form.Icon = NetIcon(str(ico_path))
+
+        form.Invoke(Func[Type](_set_icon))
+    except Exception:
+        pass
+
+
+def _ensure_browser_window():
+    # Caller must hold _browser_window_lock.
+    global _browser_window, _browser_api
+    if _browser_window is not None:
+        _browser_window.show()
+        return
+
+    x, y, width, height = _preview_window_geometry()
+    browser_url = f"{_own_ui_base}/browser.html"
+    # BrowserWindowApi needs the Window to call evaluate_js()/minimize()/
+    # etc, but create_window() needs the js_api object up front — break the
+    # cycle by handing it a bare instance first and filling in ._win right
+    # after, before the page has had any chance to load and call back in.
+    browser_api = BrowserWindowApi(None)
+    win = webview.create_window(
+        "Dev Hub — Navigateur",
+        browser_url,
+        js_api=browser_api,
+        x=x,
+        y=y,
+        width=width,
+        height=height,
+        min_size=(360, 300),
+        frameless=True,
+        easy_drag=False,
+        background_color="#0a0a0c",
+    )
+    browser_api._win = win
+    _browser_window = win
+    _browser_api = browser_api
+    # Win+Arrow / Aero Snap support was attempted twice for this frameless
+    # window and reverted both times:
+    #   1. Just restoring WS_THICKFRAME (for snap eligibility) made Windows
+    #      reserve its standard resizable-border non-client area at the
+    #      top of the window — a visible gap above the tab strip.
+    #   2. Fixing that gap via a WM_NCCALCSIZE WndProc override (real
+    #      native subclassing through ctypes SetWindowLongPtrW) removed
+    #      the gap, but interacting with this window's own F11 fullscreen
+    #      toggle left it with a visible gray border and, worse, no longer
+    #      resizable at all — a functional regression well past what a
+    #      keyboard-shortcut nicety is worth. Reverted back to no snap
+    #      support rather than ship a broken resize.
+    # Not worth a third attempt without a way to test interactively.
+    _apply_browser_window_icon(win, load_config().get("theme", "dark"))
+
+    def _on_closing():
+        global _browser_window, _browser_api
+        _browser_window = None
+        _browser_api = None
+
+    win.events.closing += _on_closing
+
+
+def _close_all_preview_windows():
+    global _browser_window, _browser_api
+    if _browser_window is not None:
+        try:
+            _browser_window.destroy()
+        except Exception:
+            pass
+    _browser_window = None
+    _browser_api = None
 
 
 def load_config():
@@ -934,6 +1761,28 @@ class Api:
         config["repos"].append(entry)
         save_config(config)
         return self._repo_info(entry)
+
+    def duplicate_repo(self, path):
+        # A literal filesystem copy (including .git and any uncommitted
+        # changes), not a fresh `git clone` — the point is duplicating the
+        # project exactly as it sits right now, not resetting it to HEAD.
+        src = Path(path)
+        if not src.is_dir():
+            return {"error": "Dossier introuvable"}
+        parent = src.parent
+        dest = None
+        for i in range(1, 100):
+            candidate = parent / (f"{src.name}-copie" if i == 1 else f"{src.name}-copie-{i}")
+            if not candidate.exists():
+                dest = candidate
+                break
+        if dest is None:
+            return {"error": "Impossible de trouver un nom de dossier disponible"}
+        try:
+            shutil.copytree(src, dest)
+        except OSError as e:
+            return {"error": str(e)}
+        return self.add_repo(str(dest))
 
     def scan_folder(self, root):
         if not root:
@@ -1129,6 +1978,32 @@ class Api:
         file_path = Path(path) / file
         file_path.write_text(content, encoding="utf-8")
         out, err, code = run_git(path, "add", "--", file)
+        if code != 0:
+            return {"error": err or out}
+        return {"ok": True}
+
+    def discard_file_changes(self, path, file):
+        # Rollback for a single file — a new/untracked file has no HEAD
+        # version to restore, so it's just deleted; a tracked file (staged
+        # or not) is reset back to what's actually committed.
+        if not _safe_repo_file(path, file):
+            return {"error": "Chemin de fichier invalide"}
+        out, err, code = run_git(path, "status", "--porcelain=v1", "--", file)
+        if code != 0:
+            return {"error": err}
+        is_untracked = out[:2].strip() == "??"
+        if is_untracked:
+            file_path = Path(path) / file
+            try:
+                if file_path.is_dir():
+                    shutil.rmtree(file_path)
+                elif file_path.exists():
+                    file_path.unlink()
+            except OSError as e:
+                return {"error": str(e)}
+            return {"ok": True}
+        run_git(path, "reset", "--", file)
+        out, err, code = run_git(path, "checkout", "--", file)
         if code != 0:
             return {"error": err or out}
         return {"ok": True}
@@ -1969,6 +2844,8 @@ class Api:
         config["theme"] = theme or "dark"
         save_config(config)
         threading.Thread(target=_apply_window_icon, args=(config["theme"],), daemon=True).start()
+        if _browser_window is not None:
+            threading.Thread(target=_push_theme_to_browser_window, daemon=True).start()
         return {"ok": True}
 
     def get_ai_settings(self):
@@ -2012,14 +2889,50 @@ class Api:
         return {"commits": commits}
 
     def list_repo_files(self, path):
-        # Tracked + untracked-but-not-gitignored, in one flat list — the
-        # same exclusion git itself already applies, so node_modules/build
-        # output stay out of the browser tree without reimplementing
-        # .gitignore matching here.
-        out, err, code = run_git(path, "ls-files", "--cached", "--others", "--exclude-standard")
+        # A real filesystem walk, not `git ls-files` — the git-based version
+        # hid anything gitignored (.env, generated docs, etc.), which meant
+        # the browser was missing files that are very much still "part of
+        # the project". Only a short, universally-noise list of directories
+        # is skipped, purely so a stray node_modules doesn't turn the tree
+        # into tens of thousands of rows.
+        base = Path(path)
+        files = []
+        for root, dirs, filenames in os.walk(base):
+            dirs[:] = [d for d in dirs if d not in CODE_BROWSER_SKIP_DIRS]
+            rel_root = Path(root).relative_to(base)
+            for name in filenames:
+                rel = name if str(rel_root) == "." else f"{rel_root.as_posix()}/{name}"
+                files.append(rel)
+        return {"files": files}
+
+    def list_contributors(self, path, ref="HEAD"):
+        # Local `git shortlog`, not a GitHub/GitLab API call — no token or
+        # per-host auth to manage, works offline, and already sorted by
+        # commit count. It shows who has *committed* here, not who has push
+        # access (that's a real "collaborators" concept the git CLI has no
+        # notion of), but it's the useful-without-extra-setup version.
+        # Scoped to a single ref rather than --all: someone can have
+        # commits on one branch and none on another, so an all-branches
+        # combined count would hide that per-branch difference.
+        out, err, code = run_git(path, "shortlog", "-sne", ref or "HEAD")
         if code != 0:
             return {"error": err}
-        return {"files": [f for f in out.splitlines() if f]}
+        contributors = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("\t", 1)
+            if len(parts) != 2:
+                continue
+            count_str, rest = parts
+            m = re.match(r"^(.*?)\s*<(.*?)>$", rest)
+            contributors.append({
+                "name": m.group(1) if m else rest,
+                "email": m.group(2) if m else "",
+                "commits": int(count_str.strip()),
+            })
+        return {"contributors": contributors}
 
     def read_file_content(self, path, file):
         if not _safe_repo_file(path, file):
@@ -2029,8 +2942,36 @@ class Api:
             return {"error": "Fichier introuvable"}
         try:
             size = file_path.stat().st_size
-            if size > 2 * 1024 * 1024:
-                return {"error": "Fichier trop volumineux pour l'aperçu (> 2 Mo) — ouvre-le dans l'IDE.", "tooLarge": True}
+        except OSError as e:
+            return {"error": str(e)}
+
+        # .ts/.mts/.cts is TypeScript here, but the system MIME database
+        # (what mimetypes.guess_type reads) registers .ts as the much
+        # older MPEG-2 Transport Stream video format — guessing it as
+        # video/mp2t sent every .ts file down the base64 "video" path,
+        # which produced a blank/broken player instead of the source.
+        mime = None if file_path.suffix.lower() in (".ts", ".mts", ".cts") else mimetypes.guess_type(file_path.name)[0]
+        is_renderable_binary = mime and (
+            mime.startswith("image/") or mime.startswith("video/") or mime.startswith("audio/") or mime == "application/pdf"
+        )
+        if is_renderable_binary:
+            # Base64-inlined through the JSON bridge, not streamed — fine
+            # for images/PDFs and short clips, but a full movie file would
+            # both bloat memory and be slow to hand over this way, so the
+            # cap is generous for media without trying to support arbitrary
+            # video sizes.
+            if size > 20 * 1024 * 1024:
+                return {"error": "Fichier trop volumineux pour l'aperçu (> 20 Mo) — ouvre-le dans l'IDE.", "tooLarge": True}
+            try:
+                data = file_path.read_bytes()
+            except OSError as e:
+                return {"error": str(e)}
+            encoded = base64.b64encode(data).decode("ascii")
+            return {"dataUrl": f"data:{mime};base64,{encoded}", "mime": mime, "size": size}
+
+        if size > 2 * 1024 * 1024:
+            return {"error": "Fichier trop volumineux pour l'aperçu (> 2 Mo) — ouvre-le dans l'IDE.", "tooLarge": True}
+        try:
             data = file_path.read_bytes()
         except OSError as e:
             return {"error": str(e)}
@@ -2282,15 +3223,6 @@ class Api:
             return {"error": f"Launcher '{launcher}' introuvable."}
         return {"ok": True, "log": f"{launcher} redémarré sur {Path(path).name}"}
 
-    def proxy_url(self, url):
-        if not url:
-            return {"error": "URL vide"}
-        try:
-            port = _ensure_proxy()
-        except Exception as e:
-            return {"error": f"Proxy indisponible : {e}"}
-        return {"url": f"http://127.0.0.1:{port}/?url={urllib.parse.quote(url, safe='')}"}
-
     def open_external(self, url):
         if not url:
             return {"ok": False, "error": "URL vide"}
@@ -2299,6 +3231,20 @@ class Api:
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def open_browser_tab(self, url=None, title=None):
+        # url is optional — the "Navigateur" header button wants a blank
+        # new tab, which new_tab() below already handles by falling back
+        # to the start page. Callers that need a real URL (the Processus
+        # "Ouvrir" buttons) already disable themselves via `disabled={!url}`
+        # client-side.
+        try:
+            with _browser_window_lock:
+                _ensure_browser_window()
+            _browser_api.new_tab(url, title)
+        except Exception as e:
+            return {"error": f"Impossible d'ouvrir l'onglet : {e}"}
+        return {"ok": True}
 
     # Frameless window (custom title bar) has no native min/max/close chrome,
     # so the React-drawn buttons drive these directly.
@@ -2518,6 +3464,40 @@ class Api:
             tables = [r[0] for r in cur.fetchall()]
             cur.close()
             return {"tables": tables}
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            conn.close()
+
+    def db_schema_overview(self, path):
+        # Every table's columns + FKs in one round trip, reusing the same
+        # connection — the ER diagram needs all of them at once to draw
+        # relationship lines, so N separate db_table_schema calls would
+        # both be slower and reopen the connection every time.
+        conn, engine, error = self._db_connect(path)
+        if error:
+            return {"error": error}
+        try:
+            if engine == "mongo":
+                db = conn[_mongo_db_name(_db_connections[path]["uri"]) or conn.list_database_names()[0]]
+                names = sorted(db.list_collection_names())
+                return {"tables": [{"name": n, "columns": [], "pk_column": "_id"} for n in names], "engine": engine}
+
+            cur = conn.cursor()
+            if engine == "postgres":
+                cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name")
+            elif engine == "mysql":
+                cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = DATABASE() ORDER BY table_name")
+            else:
+                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+            names = [r[0] for r in cur.fetchall()]
+            cur.close()
+
+            tables = []
+            for name in names:
+                columns, pk_column = _fetch_schema(conn, engine, name)
+                tables.append({"name": name, "columns": columns, "pk_column": pk_column})
+            return {"tables": tables, "engine": engine}
         except Exception as e:
             return {"error": str(e)}
         finally:
@@ -2976,13 +3956,26 @@ def _f11_fullscreen_watch():
     user32 = ctypes.windll.user32
     msg = _MSG()
     registered = False
+    focused_win = None  # whichever of the two windows is foreground right now
     try:
         while True:
             try:
-                hwnd = win32gui.FindWindow(None, "Dev Hub")
+                main_hwnd = win32gui.FindWindow(None, "Dev Hub")
             except Exception:
-                hwnd = None
-            focused = bool(hwnd) and win32gui.GetForegroundWindow() == hwnd
+                main_hwnd = None
+            try:
+                browser_hwnd = win32gui.FindWindow(None, "Dev Hub — Navigateur")
+            except Exception:
+                browser_hwnd = None
+
+            foreground = win32gui.GetForegroundWindow()
+            if main_hwnd and foreground == main_hwnd:
+                focused_win = webview.windows[0]
+            elif browser_hwnd and foreground == browser_hwnd:
+                focused_win = _browser_window
+            else:
+                focused_win = None
+            focused = focused_win is not None
 
             if focused and not registered:
                 registered = bool(user32.RegisterHotKey(None, _F11_HOTKEY_ID, 0, _VK_F11))
@@ -2996,7 +3989,7 @@ def _f11_fullscreen_watch():
                 if msg.message != _WM_HOTKEY:
                     continue
                 try:
-                    win = webview.windows[0]
+                    win = focused_win or webview.windows[0]
                     if msg.wParam == _F11_HOTKEY_ID:
                         _set_fullscreen(win, not _is_window_fullscreen(win))
                     elif msg.wParam == _ESCAPE_HOTKEY_ID:
@@ -3101,13 +4094,24 @@ def _apply_window_icon(theme, retries=1):
 
 
 def main():
+    global _own_ui_base
     api = Api()
     dev_url = os.environ.get("DEV_HUB_DEV_URL")
     if dev_url:
         target = dev_url
+        _own_ui_base = dev_url.rstrip("/")
     else:
         base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent.parent
-        target = str(base / "frontend" / "dist" / "index.html")
+        dist_dir = base / "frontend" / "dist"
+        own_port = _serve_own_ui(dist_dir)
+        # "localhost", not the literal 127.0.0.1 it resolves to — the two
+        # are different *sites* to Chromium's cookie/storage partitioning
+        # even though they're the same machine, so a previewed dev server
+        # on http://localhost:3000 would still be cross-site (and get its
+        # cookies isolated on a hard reload) against a 127.0.0.1 top-level
+        # page. Matching hostnames puts both under the same site.
+        _own_ui_base = f"http://localhost:{own_port}"
+        target = f"{_own_ui_base}/index.html"
     window = webview.create_window(
         "Dev Hub",
         target,
@@ -3120,6 +4124,7 @@ def main():
         background_color="#0a0a0c",
     )
     window.events.closing += _kill_all_running
+    window.events.closing += _close_all_preview_windows
 
     # Stale WebView2 profile dirs from past launches otherwise only get
     # cleaned when someone happens to open Processus and click the button —

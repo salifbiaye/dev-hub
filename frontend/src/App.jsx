@@ -3,9 +3,49 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
+import { ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, Handle, Position, MarkerType, applyNodeChanges } from '@xyflow/react'
+import '@xyflow/react/dist/style.css'
+import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force'
+import Prism from 'prismjs'
+// Base grammars several others extend — must load first, since plain ES
+// imports (unlike Prism's own component loader) don't resolve the
+// `require`/`peerDependencies` between component files. Missing one of
+// these left the dependent language silently registered as a broken,
+// no-op grammar: Prism.languages[lang] existed but tokenized nothing, so
+// highlightLine() ran without ever throwing yet produced zero token spans
+// — invisible as "no visible change" rather than an error.
+import 'prismjs/components/prism-markup'
+import 'prismjs/components/prism-css'
+import 'prismjs/components/prism-clike'
+import 'prismjs/components/prism-javascript'
+import 'prismjs/components/prism-markup-templating'
+import 'prismjs/components/prism-typescript'
+import 'prismjs/components/prism-jsx'
+import 'prismjs/components/prism-tsx'
+import 'prismjs/components/prism-python'
+import 'prismjs/components/prism-json'
+import 'prismjs/components/prism-bash'
+import 'prismjs/components/prism-yaml'
+import 'prismjs/components/prism-markdown'
+import 'prismjs/components/prism-sql'
+import 'prismjs/components/prism-go'
+import 'prismjs/components/prism-rust'
+import 'prismjs/components/prism-java'
+import 'prismjs/components/prism-php'
+import 'prismjs/components/prism-ruby'
+import 'prismjs/components/prism-c'
+import 'prismjs/components/prism-cpp'
+import 'prismjs/components/prism-csharp'
+import 'prismjs/components/prism-kotlin'
+import 'prismjs/components/prism-swift'
+import 'prismjs/components/prism-scss'
+import 'prismjs/components/prism-less'
+import 'prismjs/components/prism-toml'
+import 'prismjs/components/prism-docker'
 import {
   IconFolder,
   IconFile,
+  IconUndo,
   IconLayers,
   IconBranch,
   IconArrowUp,
@@ -30,7 +70,6 @@ import {
   IconWinMinimize,
   IconWinMaximize,
   IconStar,
-  IconShield,
   IconSearch,
   IconCopy,
   IconCheck,
@@ -482,7 +521,7 @@ function GroupMemberRow({ repo, selected, onToggleSelect, isRunning, runningCoun
 }
 
 
-function EnvPanel({ repo, onNotify }) {
+function EnvPanel({ repo, onNotify, refreshSignal }) {
   const [files, setFiles] = useState([])
   const [activeFile, setActiveFile] = useState(null)
   const [entries, setEntries] = useState([])
@@ -498,7 +537,12 @@ function EnvPanel({ repo, onNotify }) {
 
   useEffect(() => {
     loadFiles()
-  }, [loadFiles])
+    // The project's "Rafraîchir" button used to only reload the Branches
+    // tab's state — refreshSignal lets it also re-trigger every other
+    // tab's own data fetch without remounting the tab (which would wipe
+    // its in-progress UI state, e.g. an unsaved edit here).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadFiles, refreshSignal])
 
   const loadEntries = useCallback(async () => {
     if (!activeFile) {
@@ -511,9 +555,19 @@ function EnvPanel({ repo, onNotify }) {
     setDirty(false)
   }, [repo.path, activeFile])
 
+  // A refreshSignal bump from the outer "Rafraîchir" shouldn't blow away an
+  // edit in progress here — skip the reload while dirty rather than
+  // silently discarding unsaved changes.
+  const dirtyRef = useRef(false)
   useEffect(() => {
+    dirtyRef.current = dirty
+  }, [dirty])
+
+  useEffect(() => {
+    if (dirtyRef.current) return
     loadEntries()
-  }, [loadEntries])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadEntries, refreshSignal])
 
   function updateEntry(index, field, value) {
     setEntries((prev) => prev.map((e, i) => (i === index ? { ...e, [field]: value } : e)))
@@ -633,7 +687,7 @@ function EnvPanel({ repo, onNotify }) {
   )
 }
 
-function HistoryPanel({ repo }) {
+function HistoryPanel({ repo, refreshSignal }) {
   const [commits, setCommits] = useState(null)
   const [limit, setLimit] = useState(50)
   const [search, setSearch] = useState('')
@@ -645,7 +699,8 @@ function HistoryPanel({ repo }) {
 
   useEffect(() => {
     load()
-  }, [load])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load, refreshSignal])
 
   const filtered = (commits || []).filter((c) => {
     const q = search.trim().toLowerCase()
@@ -689,7 +744,83 @@ function HistoryPanel({ repo }) {
   )
 }
 
-function IgnorePanel({ repo, status, onNotify, onRefresh }) {
+function ContributorsPanel({ repo, branches, currentBranch, refreshSignal }) {
+  const [contributors, setContributors] = useState(null)
+  const [branch, setBranch] = useState(currentBranch || 'HEAD')
+
+  // Follow the current branch until the user explicitly picks a different
+  // one — otherwise reopening this tab after a switch_branch would keep
+  // showing stats for a branch that's no longer checked out.
+  const userPicked = useRef(false)
+  useEffect(() => {
+    if (!userPicked.current && currentBranch) setBranch(currentBranch)
+  }, [currentBranch])
+
+  useEffect(() => {
+    let alive = true
+    setContributors(null)
+    api()
+      .list_contributors(repo.path, branch)
+      .then((r) => {
+        if (!alive) return
+        setContributors(r?.error ? [] : r?.contributors || [])
+      })
+    return () => {
+      alive = false
+    }
+  }, [repo.path, branch, refreshSignal])
+
+  const total = (contributors || []).reduce((sum, c) => sum + c.commits, 0)
+
+  return (
+    <div className="flex flex-col gap-2">
+      {branches?.length > 0 && (
+        <select
+          value={branch}
+          onChange={(e) => {
+            userPicked.current = true
+            setBranch(e.target.value)
+          }}
+          className="w-fit cursor-pointer rounded-md border border-border bg-base px-2 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
+        >
+          {branches.map((b) => (
+            <option key={b} value={b}>
+              {b}
+              {b === currentBranch ? ' (actuelle)' : ''}
+            </option>
+          ))}
+        </select>
+      )}
+      {contributors === null ? (
+        <p className="text-xs text-muted">Chargement…</p>
+      ) : contributors.length === 0 ? (
+        <p className="text-xs text-muted">Aucun commit dans ce repo.</p>
+      ) : (
+        <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-1.5">
+          {contributors.map((c) => (
+            <div key={c.email || c.name} className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-xs">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-accent-bg text-[10px] font-medium text-accent">
+                {c.name.slice(0, 2).toUpperCase()}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-text">{c.name}</p>
+                {c.email && <p className="truncate font-mono text-[10px] text-muted">{c.email}</p>}
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <div className="h-1.5 w-20 overflow-hidden rounded-full bg-base">
+                  <div className="h-full bg-accent" style={{ width: `${total ? (c.commits / total) * 100 : 0}%` }} />
+                </div>
+                <span className="w-10 shrink-0 text-right font-mono text-[11px] text-muted">{c.commits}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function IgnorePanel({ repo, status, onNotify, onRefresh, refreshSignal }) {
   const [presence, setPresence] = useState({})
   const [activeFile, setActiveFile] = useState('.gitignore')
   const [content, setContent] = useState('')
@@ -706,7 +837,8 @@ function IgnorePanel({ repo, status, onNotify, onRefresh }) {
 
   useEffect(() => {
     loadPresence()
-  }, [loadPresence])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadPresence, refreshSignal])
 
   const loadContent = useCallback(async () => {
     const result = await api().read_ignore_file(repo.path, activeFile)
@@ -714,9 +846,18 @@ function IgnorePanel({ repo, status, onNotify, onRefresh }) {
     setDirty(false)
   }, [repo.path, activeFile])
 
+  // Same "don't clobber an unsaved edit on an outer refresh" guard as
+  // EnvPanel.
+  const dirtyRef = useRef(false)
   useEffect(() => {
+    dirtyRef.current = dirty
+  }, [dirty])
+
+  useEffect(() => {
+    if (dirtyRef.current) return
     loadContent()
-  }, [loadContent])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadContent, refreshSignal])
 
   async function save() {
     const result = await api().write_ignore_file(repo.path, activeFile, content)
@@ -1820,6 +1961,255 @@ function ResultTable({
 }
 
 
+function SchemaTableNode({ data }) {
+  return (
+    <div className="min-w-[220px] overflow-hidden rounded-lg border border-border-strong bg-surface text-[11px] shadow-2xl">
+      <div className="flex items-center gap-1.5 border-b border-border bg-accent-bg px-2.5 py-1.5">
+        <IconTable className="h-3 w-3 shrink-0 text-accent" />
+        <span className="truncate font-mono font-semibold text-accent">{data.name}</span>
+      </div>
+      {data.columns.length === 0 ? (
+        <p className="px-2.5 py-2 text-[10.5px] text-muted">Pas de schéma fixe</p>
+      ) : (
+        <div>
+          {data.columns.map((c) => (
+            <div key={c.name} className="relative flex items-center gap-1.5 border-b border-border px-2.5 py-1 last:border-b-0">
+              <Handle
+                type="target"
+                position={Position.Left}
+                id={`${data.name}.${c.name}`}
+                style={{
+                  opacity: c.is_pk ? 1 : 0,
+                  background: 'var(--color-warning)',
+                  border: '2px solid var(--color-surface)',
+                  width: 10,
+                  height: 10,
+                }}
+              />
+              <span
+                className={`w-5 shrink-0 text-center font-mono text-[9.5px] font-semibold ${
+                  c.is_pk ? 'text-warning' : c.fk ? 'text-accent' : 'text-transparent'
+                }`}
+                title={c.is_pk ? 'Clé primaire' : c.fk ? `Référence ${c.fk.table}.${c.fk.column}` : undefined}
+              >
+                {c.is_pk ? 'PK' : c.fk ? 'FK' : '·'}
+              </span>
+              <span className="min-w-0 flex-1 truncate font-mono text-text">{c.name}</span>
+              <span className="shrink-0 truncate font-mono text-[9.5px] text-muted">{c.type}</span>
+              <Handle
+                type="source"
+                position={Position.Right}
+                id={`${data.name}.${c.name}`}
+                style={{
+                  opacity: c.fk ? 1 : 0,
+                  background: 'var(--color-accent)',
+                  border: '2px solid var(--color-surface)',
+                  width: 10,
+                  height: 10,
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const SCHEMA_NODE_TYPES = { table: SchemaTableNode }
+
+// One consistent color per source table for its outgoing FK edges, so two
+// crossing lines can be told apart by color instead of just guessing from
+// their curve — plus the hover-based fade in SchemaDiagram for tracing an
+// exact connection on demand.
+const SCHEMA_EDGE_COLORS = ['#f59e0b', '#3b82f6', '#22c55e', '#ec4899', '#a855f7', '#06b6d4', '#f43f5e', '#84cc16', '#6366f1', '#eab308']
+function colorForTable(name) {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0
+  return SCHEMA_EDGE_COLORS[hash % SCHEMA_EDGE_COLORS.length]
+}
+
+function SchemaDiagram({ repo }) {
+  const [tables, setTables] = useState(null)
+  const [error, setError] = useState('')
+  const [fullscreen, setFullscreen] = useState(false)
+  // Every theme block in index.css already sets `color-scheme: light` or
+  // `dark` — reading it back tells React Flow's own chrome (controls,
+  // minimap, background dots) which palette to use instead of always
+  // defaulting to its light theme, which looks wrong on the ~25 dark themes.
+  const [colorMode, setColorMode] = useState(
+    () => getComputedStyle(document.documentElement).colorScheme || 'dark'
+  )
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      setColorMode(getComputedStyle(document.documentElement).colorScheme || 'dark')
+    })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => observer.disconnect()
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    api()
+      .db_schema_overview(repo.path)
+      .then((r) => {
+        if (!alive) return
+        if (r?.error) setError(r.error)
+        else setTables(r?.tables || [])
+      })
+    return () => {
+      alive = false
+    }
+  }, [repo.path])
+
+  const [hoveredTable, setHoveredTable] = useState(null)
+
+  const { nodes: computedNodes, edges } = useMemo(() => {
+    if (!tables) return { nodes: [], edges: [] }
+
+    const rawEdges = []
+    for (const t of tables) {
+      for (const c of t.columns) {
+        if (!c.fk) continue
+        const color = colorForTable(t.name)
+        rawEdges.push({
+          id: `${t.name}.${c.name}->${c.fk.table}.${c.fk.column}`,
+          source: t.name,
+          sourceHandle: `${t.name}.${c.name}`,
+          target: c.fk.table,
+          targetHandle: `${c.fk.table}.${c.fk.column}`,
+          type: 'smoothstep',
+          markerEnd: { type: MarkerType.ArrowClosed, color, width: 20, height: 20 },
+          style: { stroke: color, strokeWidth: 2.5 },
+        })
+      }
+    }
+
+    // Dagre's rankdir: 'LR' puts every referenced dim_* table strictly to
+    // the *right* of the fact_* tables that reference it — real star/
+    // snowflake schemas have a handful of dims shared by many facts, so
+    // that piles every fact into one tall left column and every dim into
+    // one tall right column instead of actually fanning out. A physics
+    // simulation has no preferred direction: a heavily-referenced table
+    // gets pulled toward the middle of its neighbors from every side, so
+    // it visually becomes the hub of a star instead of one end of a line.
+    const simNodes = tables.map((t) => ({
+      id: t.name,
+      width: 260,
+      height: 40 + Math.max(t.columns.length, 1) * 26,
+    }))
+    const simLinks = rawEdges.map((e) => ({ source: e.source, target: e.target }))
+
+    const simulation = forceSimulation(simNodes)
+      .force(
+        'link',
+        forceLink(simLinks)
+          .id((d) => d.id)
+          .distance(320)
+          .strength(0.5)
+      )
+      .force('charge', forceManyBody().strength(-1600))
+      .force('center', forceCenter(0, 0))
+      .force(
+        'collide',
+        forceCollide().radius((d) => Math.max(d.width, d.height) / 2 + 50)
+      )
+      .stop()
+    for (let i = 0; i < 400; i++) simulation.tick()
+
+    const nodes = simNodes.map((n) => ({
+      id: n.id,
+      type: 'table',
+      position: { x: n.x - n.width / 2, y: n.y - n.height / 2 },
+      data: tables.find((t) => t.name === n.id),
+    }))
+    return { nodes, edges: rawEdges }
+  }, [tables])
+
+  // `nodes` was passed straight into <ReactFlow> as a controlled prop with
+  // no onNodesChange — dragging moved a node visually but nothing ever
+  // wrote the new position back, so it snapped to its old spot on drop.
+  // Local state + applyNodeChanges makes drags stick; re-seeded from the
+  // simulation whenever the schema itself reloads.
+  const [nodes, setNodes] = useState([])
+  useEffect(() => {
+    setNodes(computedNodes)
+  }, [computedNodes])
+  const onNodesChange = useCallback((changes) => {
+    setNodes((nds) => applyNodeChanges(changes, nds))
+  }, [])
+
+  // Hovering a table fades every unrelated edge/table instead of leaving
+  // the full tangle on screen — the per-source color helps at rest, this
+  // makes tracing one table's exact connections unambiguous on demand.
+  const connectedTables = useMemo(() => {
+    if (!hoveredTable) return null
+    const set = new Set([hoveredTable])
+    for (const e of edges) {
+      if (e.source === hoveredTable) set.add(e.target)
+      if (e.target === hoveredTable) set.add(e.source)
+    }
+    return set
+  }, [edges, hoveredTable])
+
+  const displayNodes = useMemo(() => {
+    if (!connectedTables) return nodes
+    return nodes.map((n) => ({ ...n, style: { opacity: connectedTables.has(n.id) ? 1 : 0.2 } }))
+  }, [nodes, connectedTables])
+
+  const displayEdges = useMemo(() => {
+    if (!hoveredTable) return edges
+    return edges.map((e) => {
+      const related = e.source === hoveredTable || e.target === hoveredTable
+      return {
+        ...e,
+        style: { ...e.style, opacity: related ? 1 : 0.06, strokeWidth: related ? 3.5 : e.style.strokeWidth },
+        zIndex: related ? 1000 : 0,
+      }
+    })
+  }, [edges, hoveredTable])
+
+  if (error) return <p className="p-3 text-xs text-danger">{error}</p>
+  if (!tables) return <p className="p-3 text-xs text-muted">Chargement du schéma…</p>
+  if (tables.length === 0) return <p className="p-3 text-xs text-muted">Aucune table.</p>
+
+  return (
+    <div className={fullscreen ? 'fixed inset-0 z-50 flex flex-col bg-surface' : 'flex flex-1 flex-col'}>
+      <div className="flex shrink-0 items-center justify-end border-b border-border px-2 py-1.5">
+        <button
+          onClick={() => setFullscreen((v) => !v)}
+          className="cursor-pointer text-muted hover:text-text"
+          title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+        >
+          <IconMaximize className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="flex-1">
+        <ReactFlowProvider>
+          <ReactFlow
+            key={fullscreen}
+            nodes={displayNodes}
+            edges={displayEdges}
+            onNodesChange={onNodesChange}
+            onNodeMouseEnter={(_, node) => setHoveredTable(node.id)}
+            onNodeMouseLeave={() => setHoveredTable(null)}
+            nodeTypes={SCHEMA_NODE_TYPES}
+            fitView
+            minZoom={0.05}
+            maxZoom={2}
+            colorMode={colorMode}
+            proOptions={{ hideAttribution: true }}
+          >
+            <Background />
+            <Controls showInteractive={false} />
+            {tables.length > 6 && <MiniMap pannable zoomable />}
+          </ReactFlow>
+        </ReactFlowProvider>
+      </div>
+    </div>
+  )
+}
+
 function DatabasePanel({ repo, onNotify }) {
   const [configOpen, setConfigOpen] = useState(false)
   const [detectKey, setDetectKey] = useState(0)
@@ -1829,7 +2219,16 @@ function DatabasePanel({ repo, onNotify }) {
   const [tables, setTables] = useState([])
   const [tableSearch, setTableSearch] = useState('')
   const [activeTable, setActiveTable] = useState(null)
-  const [mode, setMode] = useState('browse') // browse | sql
+  const [mode, setMode] = useState('browse') // browse | sql | diagram
+  // The diagram used to be mounted only while mode === 'diagram', inside a
+  // ternary — switching to Tables/SQL and back unmounted it, so every
+  // return re-fetched the schema and re-ran the force simulation from
+  // scratch. Once visited, it now stays mounted (hidden via CSS like the
+  // rest of the app's tabs) so switching back is instant.
+  const [diagramVisited, setDiagramVisited] = useState(false)
+  useEffect(() => {
+    if (mode === 'diagram') setDiagramVisited(true)
+  }, [mode])
 
   const [schema, setSchema] = useState(null)
   const [tableData, setTableData] = useState(null)
@@ -1883,11 +2282,21 @@ function DatabasePanel({ repo, onNotify }) {
       setSchema(null)
       return
     }
+    // Without this guard, clicking table B right after table A raced two
+    // db_table_schema calls with no ordering guarantee — if A's response
+    // landed after B's, the filter bar (and everything else reading
+    // `schema`) ended up showing A's columns while `activeTable` was
+    // already B, i.e. the filter no longer matched the active table.
+    let alive = true
     api()
       .db_table_schema(repo.path, activeTable)
       .then((r) => {
+        if (!alive) return
         if (!r?.error) setSchema(r)
       })
+    return () => {
+      alive = false
+    }
   }, [repo.path, activeTable])
 
   useEffect(() => {
@@ -2109,6 +2518,14 @@ function DatabasePanel({ repo, onNotify }) {
             >
               SQL
             </button>
+            <button
+              onClick={() => setMode('diagram')}
+              className={`flex flex-1 cursor-pointer items-center justify-center border-b-2 px-2 text-[11px] font-medium transition-colors duration-150 ${
+                mode === 'diagram' ? 'border-accent text-text' : 'border-transparent text-muted hover:text-text'
+              }`}
+            >
+              Schéma
+            </button>
           </div>
         )}
 
@@ -2144,7 +2561,12 @@ function DatabasePanel({ repo, onNotify }) {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {mode === 'sql' ? (
+        {diagramVisited && (
+          <div className={mode === 'diagram' ? 'flex min-w-0 flex-1 flex-col' : 'hidden'}>
+            <SchemaDiagram repo={repo} />
+          </div>
+        )}
+        {mode !== 'diagram' && (mode === 'sql' ? (
           <>
             <div className="flex min-h-[57px] items-center justify-between gap-3 border-b border-border px-3 py-2">
               <span className="text-[13px] font-medium text-text">Éditeur SQL</span>
@@ -2276,7 +2698,7 @@ function DatabasePanel({ repo, onNotify }) {
               </>
             ) : null}
           </>
-        )}
+        ))}
       </div>
     </div>
   )
@@ -2962,6 +3384,58 @@ function ConflictPanel({ path, conflicted, onOpenIde, onNotify, onRefresh }) {
 // numbers, so both the inline expand and the sheet can render the same
 // gutter-style view. Preamble lines (diff --git/index/---/+++) are dropped —
 // the file path is already shown by the caller.
+const EXT_TO_PRISM_LANG = {
+  js: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  jsx: 'jsx', ts: 'typescript', tsx: 'tsx',
+  py: 'python', json: 'json', jsonc: 'json',
+  sh: 'bash', bash: 'bash', zsh: 'bash',
+  yml: 'yaml', yaml: 'yaml', md: 'markdown', mdx: 'markdown',
+  sql: 'sql', go: 'go', rs: 'rust', java: 'java', php: 'php', rb: 'ruby',
+  c: 'c', h: 'c', cpp: 'cpp', hpp: 'cpp', cc: 'cpp', cs: 'csharp',
+  kt: 'kotlin', kts: 'kotlin', swift: 'swift',
+  css: 'css', scss: 'scss', less: 'less', toml: 'toml',
+  dockerfile: 'docker',
+}
+
+function prismLangForFile(file) {
+  const base = file.slice(file.lastIndexOf('/') + 1).toLowerCase()
+  if (base === 'dockerfile') return 'docker'
+  const ext = base.includes('.') ? base.slice(base.lastIndexOf('.') + 1) : ''
+  return EXT_TO_PRISM_LANG[ext] || null
+}
+
+// `git diff` on an image/video/pdf just prints "Binary files ... differ" —
+// asking for a diff on a new/modified media file rendered that raw text
+// instead of the actual media, so these extensions always go through
+// read_file_content's image/video/pdf preview instead, never the diff path.
+const MEDIA_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg',
+  'pdf',
+  'mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v',
+  'mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac',
+])
+function isMediaFile(file) {
+  const base = file.slice(file.lastIndexOf('/') + 1).toLowerCase()
+  const ext = base.includes('.') ? base.slice(base.lastIndexOf('.') + 1) : ''
+  return MEDIA_EXTENSIONS.has(ext)
+}
+
+// Tokenizes one line at a time rather than the whole file through
+// Prism.highlight — that would need HTML output split back into per-line
+// rows for the table layout below, and a token spanning a line break (a
+// multi-line comment/string) would leave unbalanced <span> tags on each
+// side of the split. Per-line tokenizing can't color a construct that
+// spans lines, but never produces broken HTML, which matters more here.
+function highlightLine(text, lang) {
+  const grammar = lang && Prism.languages[lang]
+  if (!grammar) return null
+  try {
+    return Prism.highlight(text, grammar, lang)
+  } catch {
+    return null
+  }
+}
+
 function parseDiffLines(diffText) {
   const rows = []
   let oldLine = 0
@@ -3349,7 +3823,21 @@ function buildFileTree(paths, statusMap) {
       node = node.children.get(part)
     })
   }
+  markDirsWithChanges(root)
   return root
+}
+
+// Propagates "has a changed file somewhere inside" up to every ancestor
+// directory, so a folder still shows that hint while collapsed instead of
+// the M/A badge only being visible once you've already dug down to it.
+function markDirsWithChanges(node) {
+  if (node.type === 'file') return !!node.status
+  let hasChanges = false
+  for (const child of node.children.values()) {
+    if (markDirsWithChanges(child)) hasChanges = true
+  }
+  node.hasChanges = hasChanges
+  return hasChanges
 }
 
 function sortedTreeChildren(node) {
@@ -3359,15 +3847,23 @@ function sortedTreeChildren(node) {
   })
 }
 
-function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSelectFile }) {
+function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSelectFile, repoPath, onNotify }) {
   const indent = { paddingLeft: `${depth * 14 + 6}px` }
+  const absolutePath = `${repoPath}\\${node.path.replace(/\//g, '\\')}`
+
+  async function copyPath(e) {
+    e.stopPropagation()
+    const result = await copyText(absolutePath)
+    onNotify?.(result.ok ? 'Chemin copié' : `Échec de la copie : ${result.reason}`, !result.ok)
+  }
+
   if (node.type === 'file') {
     const isSelected = selectedPath === node.path
     return (
-      <button
+      <div
         onClick={() => onSelectFile(node.path)}
         style={indent}
-        className={`flex w-full cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] ${
+        className={`group flex w-full cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] ${
           isSelected ? 'bg-accent-bg text-accent' : 'text-muted hover:bg-surface-hover hover:text-text'
         }`}
       >
@@ -3383,21 +3879,38 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
             {node.status === '?' ? 'A' : node.status === 'U' ? '!' : 'M'}
           </span>
         )}
-      </button>
+        <button
+          onClick={copyPath}
+          className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-text group-hover:opacity-100"
+          title="Copier le chemin absolu"
+        >
+          <IconCopy className="h-3 w-3" />
+        </button>
+      </div>
     )
   }
   const isOpen = expanded.has(node.path)
   return (
     <div>
-      <button
+      <div
         onClick={() => onToggleDir(node.path)}
         style={indent}
-        className="flex w-full cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-text hover:bg-surface-hover"
+        className="group flex w-full cursor-pointer items-center gap-1.5 rounded px-1.5 py-1 text-left text-[12px] text-text hover:bg-surface-hover"
       >
         <IconChevronDown className={`h-3 w-3 shrink-0 transition-transform duration-150 ${isOpen ? '' : '-rotate-90'}`} />
         <IconFolder className="h-3.5 w-3.5 shrink-0 text-accent" />
-        <span className="truncate font-medium">{node.name}</span>
-      </button>
+        <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
+        {node.hasChanges && (
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" title="Contient des fichiers modifiés/nouveaux" />
+        )}
+        <button
+          onClick={copyPath}
+          className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-text group-hover:opacity-100"
+          title="Copier le chemin absolu"
+        >
+          <IconCopy className="h-3 w-3" />
+        </button>
+      </div>
       {isOpen &&
         sortedTreeChildren(node).map((child) => (
           <FileTreeNode
@@ -3408,6 +3921,8 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
             onToggleDir={onToggleDir}
             selectedPath={selectedPath}
             onSelectFile={onSelectFile}
+            repoPath={repoPath}
+            onNotify={onNotify}
           />
         ))}
     </div>
@@ -3423,12 +3938,30 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   const [search, setSearch] = useState('')
   const [matchIndex, setMatchIndex] = useState(0)
   const lineRefs = useRef([])
+  const containerRef = useRef(null)
+  const searchInputRef = useRef(null)
+
+  // Ctrl+F actually focuses the search box instead of just being a hint in
+  // the placeholder. Scoped to when this viewer is the visible one (its
+  // container isn't sitting under a hidden tab) so it doesn't steal the
+  // browser's own find-in-page on other tabs.
+  useEffect(() => {
+    function handleKey(e) {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f') return
+      if (!containerRef.current || containerRef.current.offsetParent === null) return
+      e.preventDefault()
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [])
 
   useEffect(() => {
     let alive = true
     setLoading(true)
     setSearch('')
-    if (hasChanges) {
+    if (hasChanges && !isMediaFile(file)) {
       // Full context (one giant hunk) instead of git's default 3-line
       // window — the point here is browsing the whole file with its
       // uncommitted changes highlighted, not a compact patch review.
@@ -3471,6 +4004,8 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
     return []
   }, [diffRows, content])
 
+  const lang = useMemo(() => prismLangForFile(file), [file])
+
   const needle = search.trim().toLowerCase()
   const matches = useMemo(() => {
     if (!needle) return []
@@ -3492,12 +4027,13 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   }, [matchIndex, matches])
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
+    <div ref={containerRef} className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">{file}</span>
         {rows.length > 0 && (
           <div className="flex shrink-0 items-center gap-1">
             <input
+              ref={searchInputRef}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Rechercher (Ctrl+F)…"
@@ -3568,6 +4104,20 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
 
       {loading ? (
         <p className="p-3 text-xs text-muted">Chargement…</p>
+      ) : meta?.dataUrl && meta.mime === 'application/pdf' ? (
+        <iframe title={file} src={meta.dataUrl} className="flex-1 bg-white" />
+      ) : meta?.dataUrl && meta.mime?.startsWith('video/') ? (
+        <div className="flex flex-1 items-center justify-center overflow-auto bg-base p-4">
+          <video src={meta.dataUrl} controls className="max-h-full max-w-full" />
+        </div>
+      ) : meta?.dataUrl && meta.mime?.startsWith('audio/') ? (
+        <div className="flex flex-1 items-center justify-center p-4">
+          <audio src={meta.dataUrl} controls className="w-full max-w-md" />
+        </div>
+      ) : meta?.dataUrl ? (
+        <div className="theme-scroll flex flex-1 items-center justify-center overflow-auto bg-[repeating-conic-gradient(#00000014_0%_25%,transparent_0%_50%)] bg-[length:16px_16px] p-4">
+          <img src={meta.dataUrl} alt={file} className="max-h-full max-w-full object-contain" />
+        </div>
       ) : meta?.binary ? (
         <p className="p-3 text-xs text-muted">Fichier binaire — aperçu indisponible ({Math.round((meta.size || 0) / 1024)} Ko).</p>
       ) : meta?.error ? (
@@ -3577,13 +4127,30 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
           <div style={{ display: 'table', minWidth: '100%' }}>
             {rows.map((row, i) => {
               const isMatch = needle && row.text.toLowerCase().includes(needle)
+              const isCurrentMatch = isMatch && matches[((matchIndex % matches.length) + matches.length) % matches.length] === i
               const diffBg = row.type === 'add' ? 'bg-success-bg' : row.type === 'rem' ? 'bg-danger-bg' : ''
+              // Only unchanged lines get tokenized — layering token spans
+              // under the solid add/rem text color would just fight it for
+              // no benefit, and the diff status is the more useful signal
+              // on those rows anyway.
+              const html = row.type === 'ctx' ? highlightLine(row.text, lang) : null
               return (
                 <div
                   key={i}
                   ref={(el) => (lineRefs.current[i] = el)}
                   style={{ display: 'table-row' }}
-                  className={isMatch ? 'bg-warning-bg' : diffBg}
+                  // A match used to just swap in bg-warning-bg, replacing
+                  // any diff background — two bg-* utilities of equal
+                  // specificity fight over stylesheet order, which is why
+                  // it silently lost to the diff color instead of showing.
+                  // A ring never competes with the background, so it's
+                  // added instead (and only falls back to a background of
+                  // its own on a plain, non-diff row that has none to
+                  // clash with). The current match gets a stronger ring
+                  // than the rest of the "2/2"-style match set.
+                  className={`${diffBg || (isMatch ? 'bg-warning-bg' : '')} ${
+                    isCurrentMatch ? 'ring-2 ring-inset ring-warning' : isMatch ? 'ring-1 ring-inset ring-warning/50' : ''
+                  }`.trim()}
                 >
                   <div style={{ display: 'table-cell' }} className="w-8 select-none px-1 text-right text-muted/50">
                     {row.oldLine ?? ''}
@@ -3597,7 +4164,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
                       row.type === 'add' ? 'text-success' : row.type === 'rem' ? 'text-danger' : 'text-text'
                     }`}
                   >
-                    {row.text || ' '}
+                    {html ? <span dangerouslySetInnerHTML={{ __html: html }} /> : row.text || ' '}
                   </div>
                 </div>
               )
@@ -3609,12 +4176,99 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   )
 }
 
-function CodeBrowserPanel({ repo, status, onNotify }) {
+function ancestorDirs(filePath) {
+  const parts = filePath.split('/')
+  const dirs = []
+  for (let i = 1; i < parts.length; i++) dirs.push(parts.slice(0, i).join('/'))
+  return dirs
+}
+
+function QuickOpenModal({ files, onSelect, onClose }) {
+  const [query, setQuery] = useState('')
+  const [index, setIndex] = useState(0)
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return files.slice(0, 50)
+    const scored = []
+    for (const f of files) {
+      const lower = f.toLowerCase()
+      if (!lower.includes(q)) continue
+      const base = lower.slice(lower.lastIndexOf('/') + 1)
+      scored.push({ path: f, score: base.startsWith(q) ? 0 : base.includes(q) ? 1 : 2 })
+    }
+    scored.sort((a, b) => a.score - b.score || a.path.length - b.path.length)
+    return scored.slice(0, 50).map((s) => s.path)
+  }, [query, files])
+
+  useEffect(() => {
+    setIndex(0)
+  }, [query])
+
+  function handleKey(e) {
+    if (e.key === 'Escape') {
+      onClose()
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      setIndex((i) => Math.min(i + 1, results.length - 1))
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      setIndex((i) => Math.max(i - 1, 0))
+    } else if (e.key === 'Enter' && results[index]) {
+      onSelect(results[index])
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-start justify-center bg-black/50 pt-24" onClick={onClose}>
+      <div
+        className="w-full max-w-lg overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder="Rechercher un fichier… (Échap pour fermer)"
+          className="w-full border-b border-border bg-base px-3 py-2.5 text-sm text-text outline-none"
+        />
+        <div className="theme-scroll max-h-80 overflow-y-auto">
+          {results.length === 0 ? (
+            <p className="px-3 py-3 text-xs text-muted">Aucun fichier</p>
+          ) : (
+            results.map((path, i) => (
+              <div
+                key={path}
+                onClick={() => onSelect(path)}
+                onMouseEnter={() => setIndex(i)}
+                className={`cursor-pointer truncate px-3 py-1.5 font-mono text-[12px] ${
+                  i === index ? 'bg-accent-bg text-accent' : 'text-text hover:bg-surface-hover'
+                }`}
+              >
+                {path}
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function CodeBrowserPanel({ repo, status, onNotify, refreshSignal }) {
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState(() => new Set())
   const [selectedPath, setSelectedPath] = useState(null)
   const [fullscreen, setFullscreen] = useState(false)
+  const [quickOpen, setQuickOpen] = useState(false)
+  const [fileRefreshKey, setFileRefreshKey] = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -3624,14 +4278,43 @@ function CodeBrowserPanel({ repo, status, onNotify }) {
         if (!alive) return
         setFiles(Array.isArray(r?.files) ? r.files : [])
         setLoading(false)
+        // Re-fetching the tree alone wouldn't refresh whichever file is
+        // currently open in FileViewer — bump its key so it re-mounts and
+        // re-reads its content too.
+        setFileRefreshKey((k) => k + 1)
       })
     return () => {
       alive = false
     }
-  }, [repo.path])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo.path, refreshSignal])
+
+  useEffect(() => {
+    function handleKey(e) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        e.preventDefault()
+        setQuickOpen(true)
+      }
+    }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [])
 
   const statusMap = useMemo(() => Object.fromEntries((status?.files || []).map((f) => [f.path, f.status])), [status])
   const tree = useMemo(() => buildFileTree(files, statusMap), [files, statusMap])
+
+  // Auto-open the folders leading to changed files once, on first load —
+  // otherwise a modified/new file buried a few directories deep was
+  // invisible unless you happened to click through every parent folder
+  // manually. Only fires once so it doesn't fight a user's own collapsing.
+  const autoExpandedRef = useRef(false)
+  useEffect(() => {
+    if (autoExpandedRef.current || files.length === 0) return
+    const changedPaths = Object.keys(statusMap)
+    if (changedPaths.length === 0) return
+    autoExpandedRef.current = true
+    setExpanded((prev) => new Set([...prev, ...changedPaths.flatMap(ancestorDirs)]))
+  }, [files, statusMap])
 
   function toggleDir(path) {
     setExpanded((prev) => {
@@ -3640,6 +4323,12 @@ function CodeBrowserPanel({ repo, status, onNotify }) {
       else next.add(path)
       return next
     })
+  }
+
+  function openFile(path) {
+    setSelectedPath(path)
+    setExpanded((prev) => new Set([...prev, ...ancestorDirs(path)]))
+    setQuickOpen(false)
   }
 
   if (loading) return <p className="text-xs text-muted">Chargement de l'arborescence…</p>
@@ -3652,22 +4341,35 @@ function CodeBrowserPanel({ repo, status, onNotify }) {
           : 'flex h-[75vh] overflow-hidden rounded-lg border border-border bg-surface'
       }
     >
-      <div className="theme-scroll w-64 shrink-0 overflow-y-auto border-r border-border p-1.5">
-        {sortedTreeChildren(tree).map((child) => (
-          <FileTreeNode
-            key={child.path}
-            node={child}
-            depth={0}
-            expanded={expanded}
-            onToggleDir={toggleDir}
-            selectedPath={selectedPath}
-            onSelectFile={setSelectedPath}
-          />
-        ))}
+      <div className="flex w-64 shrink-0 flex-col overflow-hidden border-r border-border">
+        <button
+          onClick={() => setQuickOpen(true)}
+          className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-border px-2 py-1.5 text-left text-[11px] text-muted hover:bg-surface-hover hover:text-text"
+        >
+          <IconSearch className="h-3.5 w-3.5" />
+          Rechercher un fichier
+          <span className="ml-auto font-mono text-[10px] text-muted/70">Ctrl+P</span>
+        </button>
+        <div className="theme-scroll flex-1 overflow-y-auto p-1.5">
+          {sortedTreeChildren(tree).map((child) => (
+            <FileTreeNode
+              key={child.path}
+              node={child}
+              depth={0}
+              expanded={expanded}
+              onToggleDir={toggleDir}
+              selectedPath={selectedPath}
+              onSelectFile={setSelectedPath}
+              repoPath={repo.path}
+              onNotify={onNotify}
+            />
+          ))}
+        </div>
       </div>
+      {quickOpen && <QuickOpenModal files={files} onSelect={openFile} onClose={() => setQuickOpen(false)} />}
       {selectedPath ? (
         <FileViewer
-          key={selectedPath}
+          key={`${selectedPath}-${fileRefreshKey}`}
           repo={repo}
           file={selectedPath}
           onNotify={onNotify}
@@ -3699,6 +4401,32 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
   const [expandedFile, setExpandedFile] = useState(null)
   const [sheetFile, setSheetFile] = useState(null)
+  const [discardTarget, setDiscardTarget] = useState(null)
+  const [discarding, setDiscarding] = useState(false)
+
+  async function confirmDiscard() {
+    if (!discardTarget) return
+    setDiscarding(true)
+    const result = await api().discard_file_changes(repo.path, discardTarget)
+    if (result?.error) onNotify(result.error, true)
+    else onNotify(`${discardTarget} restauré`)
+    setDiscarding(false)
+    setDiscardTarget(null)
+    await loadAll()
+  }
+  const [refreshSignal, setRefreshSignal] = useState(0)
+  const [duplicating, setDuplicating] = useState(false)
+
+  async function duplicateRepo() {
+    setDuplicating(true)
+    const result = await api().duplicate_repo(repo.path)
+    if (result?.error) onNotify(result.error, true)
+    else {
+      onNotify(`Dupliqué : ${result?.name || result?.path}`)
+      onRefreshList()
+    }
+    setDuplicating(false)
+  }
 
   // Re-selecting "all files" whenever the panel opens (or the status
   // refreshes while it's open) mirrors the previous always-commit-everything
@@ -3777,8 +4505,17 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
             <p className="truncate font-mono text-xs text-muted">{repo.path}</p>
           </div>
         </div>
-        <Button variant="subtle" onClick={() => loadAll(true)} title="Recharger l'état git (utile si modifié hors de Dev Hub)">
-          <IconRefresh className="h-3.5 w-3.5" />
+        <Button
+          variant="subtle"
+          disabled={loadingBranches}
+          onClick={async () => {
+            const minDelay = new Promise((r) => setTimeout(r, 400))
+            await Promise.all([loadAll(true), minDelay])
+            setRefreshSignal((n) => n + 1)
+          }}
+          title="Recharger l'état git (utile si modifié hors de Dev Hub)"
+        >
+          <IconRefresh className={`h-3.5 w-3.5 ${loadingBranches ? 'animate-spin' : ''}`} />
           Rafraîchir
         </Button>
       </div>
@@ -3799,6 +4536,15 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
       <div className="flex flex-wrap items-center justify-between gap-2">
         <StatusBadges status={status} />
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            disabled={duplicating}
+            onClick={duplicateRepo}
+            title="Dupliquer ce projet dans un nouveau dossier à côté (copie complète, y compris les modifs non commitées)"
+          >
+            <IconCopy className={`h-3.5 w-3.5 ${duplicating ? 'animate-pulse' : ''}`} />
+            {duplicating ? 'Duplication…' : 'Cloner'}
+          </Button>
           <IdeButton
             ides={ides}
             defaultIde={ide}
@@ -3948,6 +4694,18 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
                               >
                                 <IconExternal className="h-3 w-3" />
                               </button>
+                              {f.status !== 'U' && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    setDiscardTarget(f.path)
+                                  }}
+                                  className="shrink-0 cursor-pointer text-muted hover:text-danger"
+                                  title={f.status === '?' ? 'Supprimer ce fichier' : 'Annuler les modifications (retour à la version commitée)'}
+                                >
+                                  <IconUndo className="h-3 w-3" />
+                                </button>
+                              )}
                               <IconChevronDown
                                 className={`h-3 w-3 shrink-0 text-muted transition-transform duration-150 ${isExpanded ? '' : '-rotate-90'}`}
                               />
@@ -4014,6 +4772,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
       <div className="theme-scroll flex items-center gap-1 overflow-x-auto border-b border-border">
         {[
           { id: 'branches', label: 'Branches' },
+          { id: 'contributors', label: 'Contributeurs' },
           { id: 'code', label: 'Code' },
           { id: 'history', label: 'Historique' },
           { id: 'env', label: 'Env' },
@@ -4123,24 +4882,35 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
         )}
       </div>
 
+      {visitedTabs.has('contributors') && (
+        <div className={activeTab === 'contributors' ? '' : 'hidden'}>
+          <ContributorsPanel
+            repo={repo}
+            branches={branches.map((b) => b.name)}
+            currentBranch={status?.branch}
+            refreshSignal={refreshSignal}
+          />
+        </div>
+      )}
+
       {visitedTabs.has('code') && (
         <div className={activeTab === 'code' ? '' : 'hidden'}>
-          <CodeBrowserPanel repo={repo} status={status} onNotify={onNotify} />
+          <CodeBrowserPanel repo={repo} status={status} onNotify={onNotify} refreshSignal={refreshSignal} />
         </div>
       )}
 
       {visitedTabs.has('history') && (
         <div className={activeTab === 'history' ? '' : 'hidden'}>
-          <HistoryPanel repo={repo} />
+          <HistoryPanel repo={repo} refreshSignal={refreshSignal} />
         </div>
       )}
 
       <div className={activeTab === 'env' ? '' : 'hidden'}>
-        <EnvPanel repo={repo} onNotify={onNotify} />
+        <EnvPanel repo={repo} onNotify={onNotify} refreshSignal={refreshSignal} />
       </div>
 
       <div className={activeTab === 'ignore' ? '' : 'hidden'}>
-        <IgnorePanel repo={repo} status={status} onNotify={onNotify} onRefresh={loadAll} />
+        <IgnorePanel repo={repo} status={status} onNotify={onNotify} onRefresh={loadAll} refreshSignal={refreshSignal} />
       </div>
 
       <div className={activeTab === 'run' ? '' : 'hidden'}>
@@ -4166,6 +4936,21 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
       )}
 
       {sheetFile && <DiffSheet repo={repo} file={sheetFile} onClose={() => setSheetFile(null)} onNotify={onNotify} />}
+
+      {discardTarget && (
+        <ConfirmModal
+          title={discardTarget && status?.files?.find((f) => f.path === discardTarget)?.status === '?' ? 'Supprimer ce fichier ?' : 'Annuler les modifications ?'}
+          message={
+            status?.files?.find((f) => f.path === discardTarget)?.status === '?'
+              ? `"${discardTarget}" sera définitivement supprimé — il n'existe pas encore dans l'historique, impossible à récupérer.`
+              : `"${discardTarget}" reviendra à sa version commitée — tes modifications non commitées sur ce fichier seront perdues.`
+          }
+          confirmLabel={status?.files?.find((f) => f.path === discardTarget)?.status === '?' ? 'Supprimer' : 'Annuler les modifs'}
+          busy={discarding}
+          onCancel={() => setDiscardTarget(null)}
+          onConfirm={confirmDiscard}
+        />
+      )}
     </div>
   )
 }
@@ -4546,6 +5331,11 @@ function OrphanScanner({ onNotify }) {
   )
 }
 
+// Opens on demand, not automatically — auto-popping a window per process
+// was intrusive for processes nobody wanted a preview of. One real window
+// per process after that, independent of each other like normal browser
+// tabs: opening process B doesn't touch process A's window, both stay up
+// until closed.
 function ProcessesPanel({
   tabs,
   activeTab,
@@ -4562,6 +5352,7 @@ function ProcessesPanel({
   onThemeChange,
   appFullscreen,
   lockedUrlKeys,
+  onOpenBrowserTab,
 }) {
   const active = tabs.find((t) => t.path === activeTab) || tabs[0]
   const url = (active && urls[active.path]) || ''
@@ -4574,106 +5365,8 @@ function ProcessesPanel({
   // synchronously instead, and only ever upgrades loopback over LAN.
   const detectedUrlRef = useRef({})
 
-  // Proxy mode is per-tab: one preview may need the header-stripping proxy
-  // while another points at a local dev server that frames fine on its own.
-  // undefined = auto, true/false = user overrode it for this tab.
-  const [proxyByTab, setProxyByTab] = useState({})
-  const proxyOverride = active ? proxyByTab[active.path] : undefined
-  // Local dev servers frame fine on their own, and proxying them would move
-  // the page to a different origin — breaking their cookies, CORS and the
-  // HMR websocket (confirmed: it also breaks images/assets served from
-  // /_next/* since only the top HTML goes through the proxy, not its
-  // sub-resources). External sites are the ones that refuse framing.
-  // Local always wins over any stale override, matching the shield button
-  // being disabled for local URLs.
-  const proxied = !!url && !isLocalUrl(url) && (proxyOverride ?? true)
-  const [frameSrc, setFrameSrc] = useState('')
-
-  useEffect(() => {
-    let cancelled = false
-    if (!url) {
-      setFrameSrc('')
-      return
-    }
-    if (!proxied) {
-      setFrameSrc(url)
-      return
-    }
-    api()
-      ?.proxy_url(url)
-      ?.then((r) => {
-        if (cancelled) return
-        if (r?.error) {
-          onNotify(r.error, true)
-          setFrameSrc(url)
-        } else {
-          setFrameSrc(r.url)
-        }
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [url, proxied])
-
-  function toggleProxy(path) {
-    setProxyByTab((prev) => ({ ...prev, [path]: !proxied }))
-  }
-
-  // Layout state (split %, fullscreen pane, iframe reload) is per-tab —
-  // each Processus tab keeps its own independent view instead of one
-  // switching layout leaking onto the others.
-  const [reloadKeyByTab, setReloadKeyByTab] = useState({})
-  const [splitPctByTab, setSplitPctByTab] = useState({})
-  const [focusedPaneByTab, setFocusedPaneByTab] = useState({})
-  const reloadKey = (active && reloadKeyByTab[active.path]) || 0
-  const splitPct = (active && splitPctByTab[active.path]) ?? 50
-  const focusedPane = (active && focusedPaneByTab[active.path]) || null
-  function setReloadKey(updater) {
-    if (!active) return
-    setReloadKeyByTab((prev) => ({
-      ...prev,
-      [active.path]: typeof updater === 'function' ? updater(prev[active.path] || 0) : updater,
-    }))
-  }
-  function setSplitPct(value) {
-    if (!active) return
-    setSplitPctByTab((prev) => ({ ...prev, [active.path]: value }))
-  }
-  function setFocusedPane(value) {
-    if (!active) return
-    setFocusedPaneByTab((prev) => ({
-      ...prev,
-      [active.path]: typeof value === 'function' ? value(prev[active.path] || null) : value,
-    }))
-  }
-
-  const [isDragging, setIsDragging] = useState(false)
-  const containerRef = useRef(null)
-  const draggingRef = useRef(false)
   const [dragTabPath, setDragTabPath] = useState(null)
-
   const isRunning = active ? runningPaths.has(active.path) : false
-  const showNav = focusedPane !== 'logs'
-  const showLogs = focusedPane !== 'nav'
-
-  useEffect(() => {
-    function onMove(e) {
-      if (!draggingRef.current || !containerRef.current) return
-      const rect = containerRef.current.getBoundingClientRect()
-      const pct = ((e.clientX - rect.left) / rect.width) * 100
-      setSplitPct(Math.min(85, Math.max(15, pct)))
-    }
-    function onUp() {
-      draggingRef.current = false
-      setIsDragging(false)
-    }
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-  }, [])
 
   if (tabs.length === 0) {
     return (
@@ -4749,140 +5442,52 @@ function ProcessesPanel({
       )}
 
         {active && (
-          <div
-            ref={containerRef}
-            className="flex flex-1 overflow-hidden"
-            style={isDragging ? { userSelect: 'none', cursor: 'col-resize' } : undefined}
-          >
-            {showNav && (
-              <div
-                className="flex flex-col border-r border-border"
-                style={{ width: showLogs ? `${splitPct}%` : '100%' }}
-              >
-                {!appFullscreen && (
-                <div className="flex items-center gap-2 border-b border-border p-2">
-                  <input
-                    value={url}
-                    onChange={(e) => onUrlChange(active.path, e.target.value)}
-                    placeholder="http://localhost:3000"
-                    className="flex-1 rounded-md border border-border bg-base px-2 py-1 font-mono text-[12px] text-text outline-none focus:border-accent"
-                  />
-                  <button
-                    onClick={() => setReloadKey((k) => k + 1)}
-                    className="text-muted hover:text-text cursor-pointer"
-                    title="Actualiser"
-                  >
-                    <IconRefresh className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={async () => {
-                      const result = await api().open_external(url)
-                      if (!result?.ok) onNotify(`Échec de l'ouverture : ${result?.error}`, true)
-                    }}
-                    disabled={!url}
-                    className="text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
-                    title="Ouvrir dans le navigateur (utile si la page refuse l'iframe, ex: login)"
-                  >
-                    <IconExternal className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => toggleProxy(active.path)}
-                    disabled={!url || isLocalUrl(url)}
-                    className={`cursor-pointer disabled:cursor-not-allowed disabled:opacity-30 ${
-                      proxied ? 'text-accent' : 'text-muted hover:text-text'
-                    }`}
-                    title={
-                      url && isLocalUrl(url)
-                        ? "Proxy désactivé pour les URLs locales — seule la page HTML passerait par le proxy, pas ses images/ressources (/_next/*, etc.), qui casseraient en chargeant depuis une autre origine. Un serveur local s'affiche déjà en direct sans ça."
-                        : proxied
-                          ? `Proxy actif${proxyOverride === undefined ? ' (auto : site externe)' : ''} — retire X-Frame-Options. Cliquer pour charger en direct.`
-                          : `Chargement direct${proxyOverride === undefined ? ' (auto : URL locale)' : ''} — cliquer pour passer par le proxy.`
-                    }
-                  >
-                    <IconShield className="h-3.5 w-3.5" />
-                  </button>
-                  <button
-                    onClick={() => setFocusedPane(focusedPane === 'nav' ? null : 'nav')}
-                    className="text-muted hover:text-text cursor-pointer"
-                    title={focusedPane === 'nav' ? 'Rétablir le split' : 'Nav seul'}
-                  >
-                    <IconMaximize className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                )}
-                {url ? (
-                  <iframe
-                    key={`${frameSrc}-${reloadKey}`}
-                    src={frameSrc}
-                    title="preview"
-                    className="flex-1 bg-white"
-                    style={{ pointerEvents: isDragging ? 'none' : 'auto' }}
-                  />
+          <div className="flex flex-1 flex-col overflow-hidden">
+            {!appFullscreen && (
+              <div className="flex items-center gap-2 border-b border-border p-2">
+                <span className="truncate font-mono text-[11px] text-muted">{active.realPath}</span>
+                <input
+                  value={url}
+                  onChange={(e) => onUrlChange(active.path, e.target.value)}
+                  placeholder="http://localhost:3000"
+                  className="flex-1 rounded-md border border-border bg-base px-2 py-1 font-mono text-[12px] text-text outline-none focus:border-accent"
+                />
+                <button
+                  onClick={() => onOpenBrowserTab(url, active.repoName ? `${active.repoName} — ${active.configName}` : active.path)}
+                  disabled={!url}
+                  className="text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-30 cursor-pointer"
+                  title="Ouvrir dans le navigateur Dev Hub"
+                >
+                  <IconExternal className="h-3.5 w-3.5" />
+                </button>
+                {isRunning ? (
+                  <Button variant="danger" onClick={() => onStop(active.realPath, active.configName)}>
+                    <IconClose className="h-3.5 w-3.5" />
+                    Stop
+                  </Button>
                 ) : (
-                  <div className="flex flex-1 items-center justify-center p-6">
-                    <EmptyState message="Pas d'URL détectée dans les logs — colle-la manuellement ci-dessus." className="w-full max-w-sm" />
-                  </div>
+                  <span className="text-[11px] text-muted">arrêté</span>
                 )}
               </div>
             )}
-
-            {showNav && showLogs && (
-              <div
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  draggingRef.current = true
-                  setIsDragging(true)
+            {active.terminalId ? (
+              <PtyTerminal
+                key={active.terminalId}
+                terminalId={active.terminalId}
+                onNotify={onNotify}
+                onUrlDetected={(found) => {
+                  const key = active.path
+                  if (lockedUrlKeys?.has(key)) return
+                  const current = detectedUrlRef.current[key] ?? url
+                  if (!current || (!isLocalUrl(current) && isLocalUrl(found))) {
+                    detectedUrlRef.current[key] = found
+                    onUrlChange(key, found)
+                  }
                 }}
-                className="relative w-1 shrink-0 cursor-col-resize bg-border hover:bg-accent active:bg-accent"
-              >
-                <div className="absolute inset-y-0 -left-1.5 -right-1.5 cursor-col-resize" />
-              </div>
-            )}
-
-            {showLogs && (
-              <div className="flex min-h-0 flex-col" style={{ width: showNav ? `${100 - splitPct}%` : '100%' }}>
-                {!appFullscreen && (
-                <div className="flex items-center justify-between border-b border-border p-2">
-                  <span className="truncate font-mono text-[11px] text-muted">{active.realPath}</span>
-                  <div className="flex items-center gap-2">
-                    {isRunning ? (
-                      <Button variant="danger" onClick={() => onStop(active.realPath, active.configName)}>
-                        <IconClose className="h-3.5 w-3.5" />
-                        Stop
-                      </Button>
-                    ) : (
-                      <span className="text-[11px] text-muted">arrêté</span>
-                    )}
-                    <button
-                      onClick={() => setFocusedPane(focusedPane === 'logs' ? null : 'logs')}
-                      className="text-muted hover:text-text cursor-pointer"
-                      title={focusedPane === 'logs' ? 'Rétablir le split' : 'Logs seuls'}
-                    >
-                      <IconMaximize className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-                )}
-                {active.terminalId ? (
-                  <PtyTerminal
-                    key={active.terminalId}
-                    terminalId={active.terminalId}
-                    onNotify={onNotify}
-                    onUrlDetected={(found) => {
-                      const key = active.path
-                      if (lockedUrlKeys?.has(key)) return
-                      const current = detectedUrlRef.current[key] ?? url
-                      if (!current || (!isLocalUrl(current) && isLocalUrl(found))) {
-                        detectedUrlRef.current[key] = found
-                        onUrlChange(key, found)
-                      }
-                    }}
-                    className="flex-1 overflow-hidden bg-base p-2"
-                  />
-                ) : (
-                  <div className="flex flex-1 items-center justify-center text-xs text-muted">Process terminé.</div>
-                )}
-              </div>
+                className="flex-1 overflow-hidden bg-base p-2"
+              />
+            ) : (
+              <div className="flex flex-1 items-center justify-center text-xs text-muted">Process terminé.</div>
             )}
           </div>
         )}
@@ -5404,9 +6009,14 @@ function ZoomControl({ zoom, onChange }) {
   )
 }
 
-function ConfirmModal({ title, message, confirmLabel = 'Confirmer', onConfirm, onCancel }) {
+// The visible control surface for Dev Hub's browser tabs — each tab is a
+// separate native window sharing one on-screen slot (see
+// _preview_window_geometry backend-side), so this strip is what actually
+// makes switching between them read as "tabs" instead of alt-tabbing
+// through a pile of same-looking windows.
+function ConfirmModal({ title, message, confirmLabel = 'Confirmer', onConfirm, onCancel, busy = false }) {
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={onCancel}>
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={busy ? undefined : onCancel}>
       <div
         className="w-full max-w-sm rounded-xl border border-border-strong bg-surface p-5 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
@@ -5414,10 +6024,10 @@ function ConfirmModal({ title, message, confirmLabel = 'Confirmer', onConfirm, o
         <h3 className="mb-2 text-sm font-semibold text-text">{title}</h3>
         <p className="mb-4 text-xs text-muted">{message}</p>
         <div className="flex justify-end gap-2">
-          <Button variant="ghost" onClick={onCancel}>
+          <Button variant="ghost" disabled={busy} onClick={onCancel}>
             Annuler
           </Button>
-          <Button variant="solid-danger" onClick={onConfirm}>
+          <Button variant="solid-danger" disabled={busy} onClick={onConfirm}>
             {confirmLabel}
           </Button>
         </div>
@@ -5674,6 +6284,16 @@ export default function App() {
 
   function setProcessUrl(key, url) {
     setProcessUrls((prev) => ({ ...prev, [key]: url }))
+  }
+
+  // Dev Hub's own browser — a single pywebview window with its own address
+  // bar and tab strip (à la Burp Suite), living entirely inside that
+  // window. Dev Hub just asks it to open a tab; it owns its own tabs from
+  // there, so there's nothing to track on this side.
+  async function openBrowserTab(url, label) {
+    const result = await api()?.open_browser_tab(url, label ? `Dev Hub — ${label}` : undefined)
+    if (result?.error) notify(result.error, true)
+    return result
   }
 
   // A URL the user explicitly saved on a run config (e.g. a remote staging
@@ -6096,6 +6716,14 @@ export default function App() {
               </span>
             )}
           </Button>
+          <Button
+            variant="subtle"
+            onClick={() => openBrowserTab(null, 'Nouvel onglet')}
+            title="Ouvrir le navigateur Dev Hub"
+          >
+            <IconExternal className="h-3.5 w-3.5" />
+            Navigateur
+          </Button>
           <Button variant="subtle" onClick={() => setLogsOpen((v) => !v)}>
             <IconTerminal className="h-3.5 w-3.5" />
             Journaux
@@ -6128,6 +6756,7 @@ export default function App() {
         </div>
       </header>
       )}
+
 
       {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
       {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
@@ -6175,6 +6804,7 @@ export default function App() {
             onThemeChange={setThemeMode}
             appFullscreen={appFullscreen}
             lockedUrlKeys={lockedUrlKeysRef.current}
+            onOpenBrowserTab={openBrowserTab}
           />
         </div>
       )}
@@ -6503,7 +7133,7 @@ export default function App() {
                 .filter(([, meta]) => meta.realPath === selectedRepo.path)
                 .map(([key, meta]) => [meta.configName, { key, terminalId: meta.terminalId, running: runningPaths.has(key) }])
             )}
-            onStartRun={(path, name, url) => startRun(path, name, selectedRepo.name, url)}
+            onStartRun={startRun}
             onStopRun={stopRun}
             onClearRun={clearRunEntry}
             onBack={() => setSelectedPath(null)}

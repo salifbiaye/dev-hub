@@ -6,6 +6,19 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.3.0] - 2026-09-18
+
+### ✨ Nouveautés
+- Nouveau navigateur intégré à Dev Hub pour prévisualiser les apps lancées depuis Processus (façon Burp Suite), sans les limites de session d'un aperçu classique : vrais onglets indépendants les uns des autres, réordonnables par glisser-déposer, avec favicons, page de nouvel onglet listant les sites les plus visités, bascule vue mobile/bureau, barre d'adresse avec suggestions (historique + recherche web), suit le thème de Dev Hub, et propose d'enregistrer les mots de passe
+- Nouvel onglet Contributeurs : commits par auteur, par branche
+- Onglet BDD : schéma visuel des tables et de leurs relations, diagramme interactif et déplaçable
+- Onglet Code : l'arborescence montre maintenant tous les fichiers du projet (avant, seuls les fichiers suivis/non ignorés par git étaient visibles)
+- Onglet Code : aperçu des images, vidéos, audio et PDF au lieu de "fichier binaire"
+- Onglet Code : coloration syntaxique, recherche rapide de fichier (Ctrl+P), recherche dans le fichier ouvert (Ctrl+F), copier le chemin absolu
+
+### 🐛 Corrections
+- Lancer un run avec une URL configurée depuis l'onglet Exécution affichait le nom du projet à la place de l'URL dans l'aperçu
+
 ## [0.2.3] - 2026-09-11
 
 ### ✨ Nouveautés

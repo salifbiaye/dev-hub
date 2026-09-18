@@ -751,6 +751,55 @@ body {
   background-clip: padding-box;
 }
 
+/* Code tab syntax highlighting (Prism, tokenized per line) — mapped onto
+   the app's own semantic colors instead of importing a prebuilt Prism
+   theme, so it follows whichever of the 28 themes is active instead of
+   clashing with it. */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: var(--color-muted);
+  font-style: italic;
+}
+.token.keyword,
+.token.selector,
+.token.important,
+.token.atrule,
+.token.tag,
+.token.deleted {
+  color: var(--color-accent);
+}
+.token.string,
+.token.attr-value,
+.token.char,
+.token.regex,
+.token.inserted {
+  color: var(--color-success);
+}
+.token.number,
+.token.boolean,
+.token.constant,
+.token.symbol {
+  color: var(--color-warning);
+}
+.token.function,
+.token.class-name {
+  color: var(--color-danger);
+}
+.token.property,
+.token.attr-name {
+  color: var(--color-warning);
+}
+.token.punctuation,
+.token.operator {
+  color: var(--color-muted);
+}
+.token.important,
+.token.bold {
+  font-weight: 600;
+}
+
 @keyframes splash-ripple {
   0% {
     transform: scale(1);

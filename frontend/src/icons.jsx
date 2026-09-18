@@ -73,6 +73,15 @@ export function IconExternal({ className }) {
   )
 }
 
+export function IconUndo({ className }) {
+  return (
+    <svg {...base} className={className}>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10a6 6 0 0 1 0 12h-3" />
+    </svg>
+  )
+}
+
 export function IconRefresh({ className }) {
   return (
     <svg {...base} className={className}>
