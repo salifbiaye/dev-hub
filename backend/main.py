@@ -55,7 +55,7 @@ APP_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DevHub"
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 CONFIG_PATH = APP_DATA_DIR / "config.json"
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 GITHUB_REPO = "salifbiaye/dev-hub"
 
 KNOWN_IDES = ["webstorm", "idea1", "pycharm", "code", "rider", "goland", "clion", "phpstorm"]
@@ -509,6 +509,16 @@ def _coerce_value(raw, family, nullable, has_default):
     return raw, None
 
 
+def _sql_literal(value, family):
+    if value is None:
+        return "NULL"
+    if family in ("int", "float"):
+        return str(value)
+    if family == "bool":
+        return "TRUE" if str(value).strip().lower() in ("true", "1", "t") else "FALSE"
+    return "'" + str(value).replace("'", "''") + "'"
+
+
 _FILTER_OPS = {"=": "=", "!=": "!=", ">": ">", "<": "<", ">=": ">=", "<=": "<=", "like": "LIKE"}
 _MONGO_FILTER_OPS = {"=": "$eq", "!=": "$ne", ">": "$gt", "<": "$lt", ">=": "$gte", "<=": "$lte"}
 
@@ -535,6 +545,30 @@ def _build_where(engine, valid_columns, filters, placeholder):
     if not clauses:
         return "", params
     return " WHERE " + " AND ".join(clauses), params
+
+
+def _build_search_clause(engine, schema_columns, search, placeholder):
+    # OR'd across every text-ish column — searchable columns are limited to
+    # families that can be safely LIKE-matched, so a numeric column with
+    # e.g. "42" doesn't silently need a cast that could error on some engines.
+    if not (search or "").strip():
+        return "", []
+    quote = "`" if engine == "mysql" else '"'
+    like_op = "ILIKE" if engine == "postgres" else "LIKE"
+    # postgres/mysql have no ~~*/LIKE operator directly on uuid/json — those
+    # need an explicit cast to text first, or the query fails outright
+    # (confirmed: "operator does not exist: uuid ~~* unknown").
+    cast_type = "CHAR" if engine == "mysql" else "TEXT"
+    cols = [c for c in schema_columns if c["family"] in ("text", "uuid", "json")]
+    if not cols:
+        return "", []
+    clauses = []
+    for c in cols:
+        qcol = f"{quote}{c['name']}{quote}"
+        expr = f"CAST({qcol} AS {cast_type})" if c["family"] in ("uuid", "json") else qcol
+        clauses.append(f"{expr} {like_op} {placeholder}")
+    params = [f"%{search}%"] * len(cols)
+    return " (" + " OR ".join(clauses) + ")", params
 
 
 def _build_mongo_filter(filters):
@@ -1890,6 +1924,69 @@ class Api:
         result = webview.windows[0].create_file_dialog(webview.FileDialog.FOLDER)
         return result[0] if result else None
 
+    def check_repo_host_cli(self):
+        # gh/glab own their auth entirely (gh auth login / glab auth login
+        # — a browser OAuth flow, token stored by the CLI itself) — Dev Hub
+        # never sees a credential, it just shells out once the user has
+        # already logged in, and needs to know which of the two are ready
+        # so the "create repo" form can offer only what actually works.
+        status = {}
+        for name, binary in (("github", "gh"), ("gitlab", "glab")):
+            installed = shutil.which(binary) is not None
+            authenticated = False
+            if installed:
+                try:
+                    result = subprocess.run(
+                        [binary, "auth", "status"],
+                        capture_output=True,
+                        timeout=10,
+                        creationflags=subprocess.CREATE_NO_WINDOW,
+                    )
+                    authenticated = result.returncode == 0
+                except Exception:
+                    authenticated = False
+            status[name] = {"installed": installed, "authenticated": authenticated}
+        return status
+
+    def create_and_clone_repo(self, provider, name, visibility, description, parent_dir):
+        name = (name or "").strip()
+        parent_dir = (parent_dir or "").strip()
+        if not name or not parent_dir:
+            return {"error": "Nom et dossier requis"}
+        if provider not in ("github", "gitlab"):
+            return {"error": "Hébergeur inconnu"}
+        binary = "gh" if provider == "github" else "glab"
+        if shutil.which(binary) is None:
+            return {"error": f"{binary} introuvable — installe-le puis connecte-toi (`{binary} auth login`)."}
+
+        dest = Path(parent_dir) / name
+        if dest.exists():
+            return {"error": f"{dest} existe déjà"}
+
+        args = [binary, "repo", "create", name, "--public" if visibility == "public" else "--private", "--clone"]
+        if description:
+            args += ["--description", description]
+
+        try:
+            result = subprocess.run(
+                args,
+                cwd=parent_dir,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except Exception as e:
+            return {"error": str(e)}
+
+        if result.returncode != 0:
+            return {"error": (result.stderr or result.stdout or "Échec de la création").strip()}
+
+        if not (dest / ".git").exists():
+            return {"error": f"Le dépôt a été créé sur {provider} mais le clonage local a échoué : {dest} introuvable"}
+
+        return self.add_repo(str(dest))
+
     def git_status(self, path):
         out, err, code = run_git(path, "status", "--porcelain=v2", "--branch")
         if code != 0:
@@ -2389,7 +2486,7 @@ class Api:
         repo = next((r for r in config["repos"] if r["path"] == path), None)
         return repo.get("runs", []) if repo else []
 
-    def save_run_config(self, path, name, command, env=None, url=None):
+    def save_run_config(self, path, name, command, env=None, url=None, shell=None):
         name = (name or "").strip()
         command = (command or "").strip()
         if not name or not command:
@@ -2399,7 +2496,13 @@ class Api:
         if not repo:
             return {"error": "Repo introuvable"}
         repo.setdefault("runs", [])
-        entry = {"name": name, "command": command, "env": env or {}, "url": (url or "").strip()}
+        entry = {
+            "name": name,
+            "command": command,
+            "env": env or {},
+            "url": (url or "").strip(),
+            "shell": shell if shell in ("cmd", "powershell") else "cmd",
+        }
         existing = next((r for r in repo["runs"] if r["name"] == name), None)
         if existing:
             existing.update(entry)
@@ -2456,11 +2559,21 @@ class Api:
         env.update(run_cfg.get("env") or {})
 
         try:
-            # cmd /c (not an interactive shell we then type into) so the pty's
-            # lifetime tracks the actual command: Ctrl+C-ing the dev server
-            # ends the whole session instead of leaving a live empty shell
-            # behind that still looks "running" to the rest of the app.
-            proc = winpty.PtyProcess.spawn(["cmd.exe", "/c", run_cfg["command"]], cwd=path, env=env, dimensions=(24, 80))
+            # cmd /c or powershell -Command (not an interactive shell we
+            # then type into) so the pty's lifetime tracks the actual
+            # command: Ctrl+C-ing the dev server ends the whole session
+            # instead of leaving a live empty shell behind that still
+            # looks "running" to the rest of the app. Picking the wrong
+            # one silently breaks commands written for the other — cmd
+            # doesn't split on ";" or know PowerShell cmdlets like
+            # Copy-Item, and older Windows PowerShell (5.1) doesn't
+            # understand "&&" the way cmd/pwsh 7 do — so this is a
+            # per-command choice, not something to guess from the text.
+            if run_cfg.get("shell") == "powershell":
+                argv = ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", run_cfg["command"]]
+            else:
+                argv = ["cmd.exe", "/c", run_cfg["command"]]
+            proc = winpty.PtyProcess.spawn(argv, cwd=path, env=env, dimensions=(24, 80))
         except Exception as e:
             return {"error": str(e)}
 
@@ -3519,7 +3632,7 @@ class Api:
         finally:
             conn.close()
 
-    def db_read_table(self, path, table, limit=50, offset=0, filters=None):
+    def db_read_table(self, path, table, limit=50, offset=0, filters=None, search=None, order_by=None, order_dir="asc"):
         if not re.match(r"^[a-zA-Z0-9_$.-]+$", table or ""):
             return {"error": "Nom de table invalide"}
         conn, engine, error = self._db_connect(path)
@@ -3530,7 +3643,18 @@ class Api:
                 db = conn[_mongo_db_name(_db_connections[path]["uri"]) or conn.list_database_names()[0]]
                 coll = db[table]
                 mongo_filter = _build_mongo_filter(filters)
-                docs = list(coll.find(mongo_filter).skip(offset).limit(limit))
+                if (search or "").strip():
+                    # $text needs a text index we can't guarantee exists — fall back
+                    # to per-field regex on whatever string keys the sample already has.
+                    sample = coll.find_one(mongo_filter) or {}
+                    str_keys = [k for k, v in sample.items() if isinstance(v, str)]
+                    if str_keys:
+                        regex_clause = {"$or": [{k: {"$regex": re.escape(search), "$options": "i"}} for k in str_keys]}
+                        mongo_filter = {"$and": [mongo_filter, regex_clause]}
+                cursor = coll.find(mongo_filter)
+                if order_by:
+                    cursor = cursor.sort(order_by, -1 if order_dir == "desc" else 1)
+                docs = list(cursor.skip(offset).limit(limit))
                 columns, types = [], {}
                 for doc in docs:
                     for key, value in doc.items():
@@ -3555,10 +3679,19 @@ class Api:
             quoted = f"{quote}{table}{quote}"
             placeholder = "?" if engine == "sqlite" else "%s"
             where_sql, where_params = _build_where(engine, valid_columns, filters, placeholder)
+            search_sql, search_params = _build_search_clause(engine, schema_columns, search, placeholder)
+            if search_sql:
+                where_sql = f" WHERE {search_sql}" if not where_sql else f"{where_sql} AND{search_sql}"
+                where_params = where_params + search_params
+
+            order_sql = ""
+            if order_by in valid_columns:
+                direction = "DESC" if order_dir == "desc" else "ASC"
+                order_sql = f" ORDER BY {quote}{order_by}{quote} {direction}"
 
             cur = conn.cursor()
             cur.execute(
-                f"SELECT * FROM {quoted}{where_sql} LIMIT {placeholder} OFFSET {placeholder}",
+                f"SELECT * FROM {quoted}{where_sql}{order_sql} LIMIT {placeholder} OFFSET {placeholder}",
                 (*where_params, limit, offset),
             )
             names = [d[0] for d in cur.description]
@@ -3585,6 +3718,99 @@ class Api:
             return {"error": str(e)}
         finally:
             conn.close()
+
+    def db_export_table(self, path, table, filters=None, search=None):
+        if not re.match(r"^[a-zA-Z0-9_$.-]+$", table or ""):
+            return {"error": "Nom de table invalide"}
+        conn, engine, error = self._db_connect(path)
+        if error:
+            return {"error": error}
+        try:
+            if engine == "mongo":
+                db = conn[_mongo_db_name(_db_connections[path]["uri"]) or conn.list_database_names()[0]]
+                coll = db[table]
+                mongo_filter = _build_mongo_filter(filters)
+                docs = list(coll.find(mongo_filter))
+                columns, seen = [], set()
+                for doc in docs:
+                    for key in doc.keys():
+                        if key not in seen:
+                            seen.add(key)
+                            columns.append(key)
+                rows = [[None if doc.get(c) is None else str(doc.get(c)) for c in columns] for doc in docs]
+            else:
+                schema_columns, _pk = _fetch_schema(conn, engine, table)
+                valid_columns = {c["name"] for c in schema_columns}
+                quote = "`" if engine == "mysql" else '"'
+                quoted = f"{quote}{table}{quote}"
+                placeholder = "?" if engine == "sqlite" else "%s"
+                where_sql, where_params = _build_where(engine, valid_columns, filters, placeholder)
+                search_sql, search_params = _build_search_clause(engine, schema_columns, search, placeholder)
+                if search_sql:
+                    where_sql = f" WHERE {search_sql}" if not where_sql else f"{where_sql} AND{search_sql}"
+                    where_params = where_params + search_params
+                cur = conn.cursor()
+                cur.execute(f"SELECT * FROM {quoted}{where_sql}", tuple(where_params))
+                columns = [d[0] for d in cur.description]
+                rows = [[None if v is None else str(v) for v in row] for row in cur.fetchall()]
+                cur.close()
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            conn.close()
+
+        return self._write_xlsx_dialog(columns, rows, f"{table}.xlsx", table)
+
+    def db_export_query(self, path, sql):
+        if not (sql or "").strip():
+            return {"error": "Requête vide"}
+        conn, engine, error = self._db_connect(path)
+        if error:
+            return {"error": error}
+        try:
+            if engine == "mongo":
+                return {"error": "L'export n'est pas disponible pour MongoDB depuis l'éditeur SQL."}
+            cur = conn.cursor()
+            cur.execute(sql)
+            if not cur.description:
+                conn.commit()
+                cur.close()
+                return {"error": "La requête ne renvoie aucune donnée à exporter."}
+            columns = [d[0] for d in cur.description]
+            rows = [[None if v is None else str(v) for v in row] for row in cur.fetchall()]
+            conn.commit()
+            cur.close()
+        except Exception as e:
+            conn.rollback()
+            return {"error": str(e)}
+        finally:
+            conn.close()
+
+        return self._write_xlsx_dialog(columns, rows, "resultat.xlsx", "Résultat")
+
+    def _write_xlsx_dialog(self, columns, rows, suggested_name, sheet_title):
+        dest = webview.windows[0].create_file_dialog(
+            webview.FileDialog.SAVE, save_filename=suggested_name, file_types=("Fichiers Excel (*.xlsx)",)
+        )
+        if not dest:
+            return {"cancelled": True}
+        dest = dest[0] if isinstance(dest, (list, tuple)) else dest
+        if not dest.lower().endswith(".xlsx"):
+            dest += ".xlsx"
+
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = (sheet_title or "Sheet1")[:31]
+        ws.append(columns)
+        for row in rows:
+            ws.append(row)
+        try:
+            wb.save(dest)
+        except Exception as e:
+            return {"error": str(e)}
+        return {"path": dest, "count": len(rows)}
 
     def db_run_query(self, path, sql):
         if not (sql or "").strip():
@@ -3751,6 +3977,200 @@ class Api:
             return {"error": str(e)}
         finally:
             conn.close()
+
+    def db_import_file(self, path, table):
+        if not re.match(r"^[a-zA-Z0-9_$.-]+$", table or ""):
+            return {"error": "Nom de table invalide"}
+        # pywebview's filter parser (parse_file_type) only accepts
+        # "[\w ]+(*.ext;*.ext2)" — a "/" or other punctuation in the label
+        # makes it raise internally, which create_file_dialog swallows and
+        # turns into a silent None (looked like the button did nothing at all).
+        picked = webview.windows[0].create_file_dialog(
+            webview.FileDialog.OPEN, file_types=("Fichiers CSV et Excel (*.csv;*.xlsx)", "Tous les fichiers (*.*)")
+        )
+        if not picked:
+            return {"cancelled": True}
+        src = picked[0] if isinstance(picked, (list, tuple)) else picked
+
+        try:
+            if src.lower().endswith(".xlsx"):
+                from openpyxl import load_workbook
+
+                wb = load_workbook(src, read_only=True, data_only=True)
+                ws = wb.active
+                rows_iter = ws.iter_rows(values_only=True)
+                header = [str(c) if c is not None else "" for c in next(rows_iter, [])]
+                file_rows = [[("" if c is None else c) for c in r] for r in rows_iter]
+            else:
+                import csv
+
+                with open(src, "r", encoding="utf-8-sig", newline="") as f:
+                    reader = csv.reader(f)
+                    header = next(reader, [])
+                    file_rows = list(reader)
+        except Exception as e:
+            return {"error": f"Lecture du fichier : {e}"}
+
+        conn, engine, error = self._db_connect(path)
+        if error:
+            return {"error": error}
+        try:
+            if engine == "mongo":
+                db = conn[_mongo_db_name(_db_connections[path]["uri"]) or conn.list_database_names()[0]]
+                docs = [
+                    {h: v for h, v in zip(header, r) if h and v != ""}
+                    for r in file_rows
+                ]
+                if not docs:
+                    return {"error": "Aucune ligne à importer"}
+                result = db[table].insert_many(docs)
+                return {"inserted": len(result.inserted_ids), "skipped": 0, "errors": []}
+
+            schema_columns, _pk_column = _fetch_schema(conn, engine, table)
+            by_name = {c["name"]: c for c in schema_columns}
+            # Matched case-insensitively so a spreadsheet header like "Name"
+            # still lines up with a lowercase "name" column.
+            header_map = {}
+            lower_by_name = {n.lower(): n for n in by_name}
+            for h in header:
+                match = lower_by_name.get((h or "").strip().lower())
+                if match:
+                    header_map[h] = match
+
+            quote = "`" if engine == "mysql" else '"'
+            quoted_table = f"{quote}{table}{quote}"
+            placeholder = "?" if engine == "sqlite" else "%s"
+
+            inserted, skipped, errors = 0, 0, []
+            cur = conn.cursor()
+            for i, raw_row in enumerate(file_rows):
+                values = dict(zip(header, raw_row))
+                cols, params, row_error = [], [], None
+                for h, col_name in header_map.items():
+                    col = by_name[col_name]
+                    coerced, err = _coerce_value(values.get(h), col["family"], col["nullable"], col["has_default"])
+                    if err:
+                        row_error = f'ligne {i + 2}, "{col_name}" : {err}'
+                        break
+                    if coerced is _SKIP:
+                        continue
+                    cols.append(col_name)
+                    params.append(coerced)
+                if row_error:
+                    skipped += 1
+                    if len(errors) < 20:
+                        errors.append(row_error)
+                    continue
+                if not cols:
+                    skipped += 1
+                    continue
+                quoted_cols = ", ".join(f"{quote}{c}{quote}" for c in cols)
+                placeholders = ", ".join([placeholder] * len(cols))
+                try:
+                    cur.execute(f"INSERT INTO {quoted_table} ({quoted_cols}) VALUES ({placeholders})", tuple(params))
+                    inserted += 1
+                except Exception as e:
+                    skipped += 1
+                    if len(errors) < 20:
+                        errors.append(f"ligne {i + 2} : {e}")
+            conn.commit()
+            cur.close()
+            return {"inserted": inserted, "skipped": skipped, "errors": errors}
+        except Exception as e:
+            conn.rollback()
+            return {"error": str(e)}
+        finally:
+            conn.close()
+
+    def db_export_schema_sql(self, path, include_data=False):
+        conn, engine, error = self._db_connect(path)
+        if error:
+            return {"error": error}
+        if engine == "mongo":
+            return {"error": "Export SQL non disponible pour MongoDB."}
+        try:
+            tables_result = self.db_list_tables(path)
+            if tables_result.get("error"):
+                return tables_result
+            quote = "`" if engine == "mysql" else '"'
+            lines = [f"-- Export schéma{' + données' if include_data else ''} — {os.path.basename(path)}", ""]
+            fk_statements = []
+            for name in tables_result["tables"]:
+                columns, pk_column = _fetch_schema(conn, engine, name)
+                col_defs = []
+                for c in columns:
+                    parts = [f"{quote}{c['name']}{quote}", c["type"].upper()]
+                    if not c["nullable"]:
+                        parts.append("NOT NULL")
+                    col_defs.append(" ".join(parts))
+                if pk_column:
+                    col_defs.append(f"PRIMARY KEY ({quote}{pk_column}{quote})")
+                lines.append(f"CREATE TABLE {quote}{name}{quote} (")
+                lines.append("  " + ",\n  ".join(col_defs))
+                lines.append(");")
+                lines.append("")
+                for c in columns:
+                    if c.get("fk"):
+                        fk_statements.append(
+                            f"ALTER TABLE {quote}{name}{quote} ADD FOREIGN KEY ({quote}{c['name']}{quote}) "
+                            f"REFERENCES {quote}{c['fk']['table']}{quote} ({quote}{c['fk']['column']}{quote});"
+                        )
+                if include_data:
+                    cur = conn.cursor()
+                    cur.execute(f"SELECT * FROM {quote}{name}{quote}")
+                    col_names = [d[0] for d in cur.description]
+                    quoted_cols = ", ".join(f"{quote}{n}{quote}" for n in col_names)
+                    by_name = {c["name"]: c for c in columns}
+                    for row in cur.fetchall():
+                        vals = []
+                        for col_name, v in zip(col_names, row):
+                            vals.append(_sql_literal(v, by_name.get(col_name, {}).get("family", "text")))
+                        lines.append(f"INSERT INTO {quote}{name}{quote} ({quoted_cols}) VALUES ({', '.join(vals)});")
+                    cur.close()
+                    lines.append("")
+            if fk_statements:
+                lines.append("-- Foreign keys")
+                lines.extend(fk_statements)
+                lines.append("")
+        except Exception as e:
+            return {"error": str(e)}
+        finally:
+            conn.close()
+
+        dest = webview.windows[0].create_file_dialog(
+            webview.FileDialog.SAVE, save_filename="schema.sql", file_types=("Fichiers SQL (*.sql)",)
+        )
+        if not dest:
+            return {"cancelled": True}
+        dest = dest[0] if isinstance(dest, (list, tuple)) else dest
+        if not dest.lower().endswith(".sql"):
+            dest += ".sql"
+        try:
+            with open(dest, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+        except Exception as e:
+            return {"error": str(e)}
+        return {"path": dest}
+
+    def save_image_file(self, data_url, suggested_name="export.png"):
+        m = re.match(r"^data:image/(\w+);base64,(.+)$", data_url or "", re.DOTALL)
+        if not m:
+            return {"error": "Image invalide"}
+        ext, b64 = m.group(1), m.group(2)
+        if not suggested_name.lower().endswith(f".{ext}"):
+            suggested_name = f"{suggested_name}.{ext}"
+        dest = webview.windows[0].create_file_dialog(
+            webview.FileDialog.SAVE, save_filename=suggested_name, file_types=(f"Image (*.{ext})",)
+        )
+        if not dest:
+            return {"cancelled": True}
+        dest = dest[0] if isinstance(dest, (list, tuple)) else dest
+        try:
+            with open(dest, "wb") as f:
+                f.write(base64.b64decode(b64))
+        except Exception as e:
+            return {"error": str(e)}
+        return {"path": dest}
 
     def write_terminal(self, terminal_id, data):
         proc = _terminals.get(terminal_id)

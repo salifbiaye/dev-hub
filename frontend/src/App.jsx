@@ -3,8 +3,21 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import '@xterm/xterm/css/xterm.css'
-import { ReactFlow, ReactFlowProvider, Background, Controls, MiniMap, Handle, Position, MarkerType, applyNodeChanges } from '@xyflow/react'
+import {
+  ReactFlow,
+  ReactFlowProvider,
+  Background,
+  Controls,
+  MiniMap,
+  Handle,
+  Position,
+  MarkerType,
+  applyNodeChanges,
+  getNodesBounds,
+  useReactFlow,
+} from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import { toPng } from 'html-to-image'
 import { forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide } from 'd3-force'
 import Prism from 'prismjs'
 // Base grammars several others extend — must load first, since plain ES
@@ -69,6 +82,7 @@ import {
   IconMaximize,
   IconWinMinimize,
   IconWinMaximize,
+  IconWinRestore,
   IconStar,
   IconSearch,
   IconCopy,
@@ -1857,24 +1871,40 @@ function ResultTable({
   editable,
   onCellEdit,
   schemaByName,
+  sortColumn,
+  sortDir,
+  onSortChange,
+  onDuplicateRow,
+  onCopyRowJson,
 }) {
   const pkIdx = selectable ? columns.findIndex((c) => c.is_pk) : -1
   const allSelected = selectable && rows.length > 0 && selected.size === rows.length
-  const showLeadCol = selectable || !!draftRow
+  const showRowActions = !!onDuplicateRow || !!onCopyRowJson
+  const showLeadCol = selectable || !!draftRow || showRowActions
 
   return (
     <table className="w-full border-collapse text-left text-[12px]">
       <thead className="sticky top-0 z-10">
         <tr>
           {showLeadCol && (
-            <th className="w-14 border-b border-r border-border bg-surface px-2 py-1.5">
+            <th className={`${showRowActions ? 'w-20' : 'w-14'} border-b border-r border-border bg-surface px-2 py-1.5`}>
               {selectable && <input type="checkbox" checked={allSelected} onChange={onToggleAll} disabled={pkIdx === -1} />}
             </th>
           )}
           <th className="w-12 border-b border-r border-border bg-surface px-2 py-1.5 text-[10px] font-normal text-muted">#</th>
           {columns.map((c) => (
-            <th key={c.name} className="whitespace-nowrap border-b border-r border-border bg-surface px-3 py-1.5 last:border-r-0">
+            <th
+              key={c.name}
+              onClick={onSortChange ? () => onSortChange(c.name) : undefined}
+              className={`whitespace-nowrap border-b border-r border-border bg-surface px-3 py-1.5 last:border-r-0 ${
+                onSortChange ? 'cursor-pointer select-none hover:bg-surface-hover' : ''
+              }`}
+              title={onSortChange ? 'Trier par cette colonne' : undefined}
+            >
               <span className="font-mono text-[11px] font-medium text-text">{c.name}</span>
+              {onSortChange && sortColumn === c.name && (
+                <span className="ml-1 text-[10px] text-accent">{sortDir === 'desc' ? '↓' : '↑'}</span>
+              )}
               {c.type && <span className="ml-1.5 font-mono text-[10px] text-muted">{c.type}</span>}
               {c.fk && (
                 <span className="ml-1.5 rounded-full border border-border px-1.5 py-0.5 text-[9px] text-muted">
@@ -1929,14 +1959,35 @@ function ResultTable({
               <tr key={i} className="hover:bg-surface-hover">
                 {showLeadCol && (
                   <td className="border-b border-r border-border px-2 py-1.5">
-                    {selectable && (
-                      <input
-                        type="checkbox"
-                        checked={pkValue !== null && selected.has(pkValue)}
-                        onChange={() => onToggleRow(pkValue)}
-                        disabled={pkValue === null}
-                      />
-                    )}
+                    <div className="flex items-center gap-1">
+                      {selectable && (
+                        <input
+                          type="checkbox"
+                          checked={pkValue !== null && selected.has(pkValue)}
+                          onChange={() => onToggleRow(pkValue)}
+                          disabled={pkValue === null}
+                        />
+                      )}
+                      {onCopyRowJson && (
+                        <button
+                          onClick={() => onCopyRowJson(row, columns)}
+                          className="text-muted hover:text-text cursor-pointer"
+                          title="Copier la ligne en JSON"
+                        >
+                          <IconCopy className="h-3 w-3" />
+                        </button>
+                      )}
+                      {onDuplicateRow && (
+                        <button
+                          onClick={() => onDuplicateRow(row, columns)}
+                          disabled={pkValue === null}
+                          className="text-muted hover:text-text cursor-pointer disabled:opacity-30"
+                          title="Dupliquer la ligne"
+                        >
+                          <IconPlus className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
                   </td>
                 )}
                 <td className="border-b border-r border-border px-2 py-1.5 text-right font-mono text-[10px] text-muted">
@@ -2029,10 +2080,13 @@ function colorForTable(name) {
   return SCHEMA_EDGE_COLORS[hash % SCHEMA_EDGE_COLORS.length]
 }
 
-function SchemaDiagram({ repo }) {
+function SchemaDiagram({ repo, onNotify }) {
   const [tables, setTables] = useState(null)
   const [error, setError] = useState('')
   const [fullscreen, setFullscreen] = useState(false)
+  const [exportingImage, setExportingImage] = useState(false)
+  const [exportingSql, setExportingSql] = useState(false)
+  const flowWrapperRef = useRef(null)
   // Every theme block in index.css already sets `color-scheme: light` or
   // `dark` — reading it back tells React Flow's own chrome (controls,
   // minimap, background dots) which palette to use instead of always
@@ -2174,18 +2228,20 @@ function SchemaDiagram({ repo }) {
   if (tables.length === 0) return <p className="p-3 text-xs text-muted">Aucune table.</p>
 
   return (
-    <div className={fullscreen ? 'fixed inset-0 z-50 flex flex-col bg-surface' : 'flex flex-1 flex-col'}>
-      <div className="flex shrink-0 items-center justify-end border-b border-border px-2 py-1.5">
-        <button
-          onClick={() => setFullscreen((v) => !v)}
-          className="cursor-pointer text-muted hover:text-text"
-          title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
-        >
-          <IconMaximize className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      <div className="flex-1">
-        <ReactFlowProvider>
+    <div ref={flowWrapperRef} className={fullscreen ? 'fixed inset-0 z-50 flex flex-col bg-surface' : 'flex flex-1 flex-col'}>
+      <ReactFlowProvider>
+        <SchemaDiagramToolbar
+          wrapperRef={flowWrapperRef}
+          fullscreen={fullscreen}
+          onToggleFullscreen={() => setFullscreen((v) => !v)}
+          exportingImage={exportingImage}
+          setExportingImage={setExportingImage}
+          exportingSql={exportingSql}
+          setExportingSql={setExportingSql}
+          repo={repo}
+          onNotify={onNotify}
+        />
+        <div className="flex-1">
           <ReactFlow
             key={fullscreen}
             nodes={displayNodes}
@@ -2204,8 +2260,91 @@ function SchemaDiagram({ repo }) {
             <Controls showInteractive={false} />
             {tables.length > 6 && <MiniMap pannable zoomable />}
           </ReactFlow>
-        </ReactFlowProvider>
-      </div>
+        </div>
+      </ReactFlowProvider>
+    </div>
+  )
+}
+
+function SchemaDiagramToolbar({
+  wrapperRef,
+  fullscreen,
+  onToggleFullscreen,
+  exportingImage,
+  setExportingImage,
+  exportingSql,
+  setExportingSql,
+  repo,
+  onNotify,
+}) {
+  const { getNodes } = useReactFlow()
+
+  async function exportImage() {
+    setExportingImage(true)
+    try {
+      const nodes = getNodes()
+      const bounds = getNodesBounds(nodes)
+      const padding = 80
+      // Rendered at 1:1 (zoom 1) instead of fitted/downscaled into a fixed
+      // canvas — with 50+ tables a fixed-size export would shrink text to
+      // illegible smudges, so the PNG just grows with the diagram instead.
+      const width = Math.min(Math.ceil(bounds.width + padding * 2), 16000)
+      const height = Math.min(Math.ceil(bounds.height + padding * 2), 16000)
+      const viewportEl = wrapperRef.current?.querySelector('.react-flow__viewport')
+      if (!viewportEl) throw new Error('Diagramme introuvable')
+      const bg = getComputedStyle(document.documentElement).getPropertyValue('--color-surface').trim() || '#0a0a0c'
+      const dataUrl = await toPng(viewportEl, {
+        backgroundColor: bg,
+        width,
+        height,
+        pixelRatio: 1,
+        style: {
+          width: `${width}px`,
+          height: `${height}px`,
+          transform: `translate(${padding - bounds.x}px, ${padding - bounds.y}px) scale(1)`,
+        },
+      })
+      const result = await api().save_image_file(dataUrl, `schema-${repo.name}.png`)
+      if (result?.error) onNotify(result.error, true)
+      else if (!result?.cancelled) onNotify(`Image exportée vers ${result.path}`)
+    } catch (e) {
+      onNotify(`Export image : ${e?.message || e}`, true)
+    } finally {
+      setExportingImage(false)
+    }
+  }
+
+  async function exportSql() {
+    setExportingSql(true)
+    const result = await api().db_export_schema_sql(repo.path, false)
+    setExportingSql(false)
+    if (result?.error) onNotify(result.error, true)
+    else if (!result?.cancelled) onNotify(`Schéma exporté vers ${result.path}`)
+  }
+
+  return (
+    <div className="flex shrink-0 items-center justify-end gap-3 border-b border-border px-2 py-1.5">
+      <button
+        onClick={exportSql}
+        disabled={exportingSql}
+        className="cursor-pointer text-[11px] text-muted hover:text-text disabled:opacity-40"
+      >
+        {exportingSql ? 'Export…' : 'Exporter en .sql'}
+      </button>
+      <button
+        onClick={exportImage}
+        disabled={exportingImage}
+        className="cursor-pointer text-[11px] text-muted hover:text-text disabled:opacity-40"
+      >
+        {exportingImage ? 'Export…' : 'Exporter en image'}
+      </button>
+      <button
+        onClick={onToggleFullscreen}
+        className="cursor-pointer text-muted hover:text-text"
+        title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+      >
+        <IconMaximize className="h-3.5 w-3.5" />
+      </button>
     </div>
   )
 }
@@ -2243,11 +2382,32 @@ function DatabasePanel({ repo, onNotify }) {
   const [insertOpen, setInsertOpen] = useState(false)
   const [insertValues, setInsertValues] = useState({})
   const [inserting, setInserting] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [exportingSchemaSql, setExportingSchemaSql] = useState(false)
+  const [searchInput, setSearchInput] = useState('')
+  const [search, setSearch] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput), 350)
+    return () => clearTimeout(t)
+  }, [searchInput])
+  const [sortColumn, setSortColumn] = useState(null)
+  const [sortDir, setSortDir] = useState('asc')
+  const [panelFullscreen, setPanelFullscreen] = useState(false)
 
   const [sql, setSql] = useState('')
   const [sqlRunning, setSqlRunning] = useState(false)
   const [sqlResult, setSqlResult] = useState(null)
   const [sqlError, setSqlError] = useState('')
+  const [sqlExporting, setSqlExporting] = useState(false)
+  const [snippets, setSnippets] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('devhub_sql_snippets') || '[]')
+    } catch {
+      return []
+    }
+  })
+  const [snippetsOpen, setSnippetsOpen] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -2310,7 +2470,7 @@ function DatabasePanel({ repo, onNotify }) {
     // never send an incomplete WHERE clause like active = '' to the DB.
     const effectiveFilters = filters.filter((f) => f.op === 'is null' || f.op === 'is not null' || (f.value ?? '') !== '')
     api()
-      .db_read_table(repo.path, activeTable, DB_PAGE_SIZE, offset, effectiveFilters)
+      .db_read_table(repo.path, activeTable, DB_PAGE_SIZE, offset, effectiveFilters, search, sortColumn, sortDir)
       .then((result) => {
         if (cancelled) return
         if (result?.error) {
@@ -2324,7 +2484,20 @@ function DatabasePanel({ repo, onNotify }) {
     return () => {
       cancelled = true
     }
-  }, [repo.path, activeTable, offset, reloadKey, filters, mode])
+  }, [repo.path, activeTable, offset, reloadKey, filters, search, sortColumn, sortDir, mode])
+
+  function toggleSort(column) {
+    setOffset(0)
+    if (sortColumn !== column) {
+      setSortColumn(column)
+      setSortDir('asc')
+    } else if (sortDir === 'asc') {
+      setSortDir('desc')
+    } else {
+      setSortColumn(null)
+      setSortDir('asc')
+    }
+  }
 
   function selectTable(t) {
     setActiveTable(t)
@@ -2335,6 +2508,10 @@ function DatabasePanel({ repo, onNotify }) {
     setConfirmDelete(false)
     setInsertOpen(false)
     setInsertValues({})
+    setSearchInput('')
+    setSearch('')
+    setSortColumn(null)
+    setSortDir('asc')
   }
 
   function onConfigSaved() {
@@ -2351,6 +2528,65 @@ function DatabasePanel({ repo, onNotify }) {
   function cancelInsert() {
     setInsertOpen(false)
     setInsertValues({})
+  }
+
+  async function exportTable() {
+    setExporting(true)
+    const effectiveFilters = filters.filter((f) => f.op === 'is null' || f.op === 'is not null' || (f.value ?? '') !== '')
+    const result = await api().db_export_table(repo.path, activeTable, effectiveFilters, search)
+    setExporting(false)
+    if (result?.error) onNotify(result.error, true)
+    else if (!result?.cancelled) onNotify(`${result.count} ligne(s) exportée(s) vers ${result.path}`)
+  }
+
+  async function importFile() {
+    setImporting(true)
+    const result = await api().db_import_file(repo.path, activeTable)
+    setImporting(false)
+    if (result?.cancelled) return
+    if (result?.error) {
+      onNotify(result.error, true)
+      return
+    }
+    onNotify(
+      result.skipped > 0
+        ? `${result.inserted} ligne(s) importée(s), ${result.skipped} ignorée(s)${result.errors?.[0] ? ` — ex: ${result.errors[0]}` : ''}`
+        : `${result.inserted} ligne(s) importée(s)`,
+      result.skipped > 0 && result.inserted === 0
+    )
+    setReloadKey((k) => k + 1)
+  }
+
+  async function exportSchemaSql() {
+    setExportingSchemaSql(true)
+    const result = await api().db_export_schema_sql(repo.path, false)
+    setExportingSchemaSql(false)
+    if (result?.error) onNotify(result.error, true)
+    else if (!result?.cancelled) onNotify(`Schéma exporté vers ${result.path}`)
+  }
+
+  function duplicateRow(row, cols) {
+    // Pre-fills the same inline draft row used by "+ Ligne" instead of
+    // inserting straight away — some tables have a NOT NULL PK with no DB
+    // default (app-generated UUIDs), so a blind copy-and-insert would just
+    // crash on the duplicated/empty key. Letting the user edit first (and
+    // fill in a fresh id) is the same flow as adding a row from scratch.
+    const pkName = schema?.pk_column
+    const values = {}
+    cols.forEach((c, i) => {
+      if (c.name !== pkName) values[c.name] = row[i]
+    })
+    setInsertValues(values)
+    setInsertOpen(true)
+  }
+
+  function copyRowJson(row, cols) {
+    const obj = {}
+    cols.forEach((c, i) => {
+      obj[c.name] = row[i]
+    })
+    navigator.clipboard.writeText(JSON.stringify(obj, null, 2))
+    onNotify('Ligne copiée en JSON')
   }
 
   async function submitInsert() {
@@ -2425,6 +2661,30 @@ function DatabasePanel({ repo, onNotify }) {
     onNotify(result.message || `${result.rows?.length ?? 0} ligne(s) retournée(s)`)
   }
 
+  async function exportSqlResult() {
+    setSqlExporting(true)
+    const result = await api().db_export_query(repo.path, sql)
+    setSqlExporting(false)
+    if (result?.error) onNotify(result.error, true)
+    else if (!result?.cancelled) onNotify(`${result.count} ligne(s) exportée(s) vers ${result.path}`)
+  }
+
+  function saveSnippet() {
+    if (!sql.trim()) return
+    const name = window.prompt('Nom de la requête favorite :')
+    if (!name) return
+    const next = [...snippets.filter((s) => s.name !== name), { name, sql }]
+    setSnippets(next)
+    localStorage.setItem('devhub_sql_snippets', JSON.stringify(next))
+    onNotify(`Requête "${name}" sauvegardée`)
+  }
+
+  function deleteSnippet(name) {
+    const next = snippets.filter((s) => s.name !== name)
+    setSnippets(next)
+    localStorage.setItem('devhub_sql_snippets', JSON.stringify(next))
+  }
+
   if (status === 'loading') {
     return <p className="text-xs text-muted">Détection de la base de données…</p>
   }
@@ -2477,18 +2737,33 @@ function DatabasePanel({ repo, onNotify }) {
   const isSql = connInfo.engine !== 'mongo'
 
   return (
-    <div className="flex h-[36rem] overflow-hidden rounded-xl border border-border bg-surface shadow-[var(--card-shadow)]">
+    <div
+      className={
+        panelFullscreen
+          ? 'fixed inset-0 z-50 flex overflow-hidden bg-surface'
+          : 'flex h-[36rem] overflow-hidden rounded-xl border border-border bg-surface shadow-[var(--card-shadow)]'
+      }
+    >
       <aside className="flex w-56 shrink-0 flex-col border-r border-border">
         <div className="flex min-h-[57px] items-center border-b border-border p-2.5">
           <div className="flex w-full items-start justify-between gap-2">
             <ConnectionBadge info={connInfo} />
-            <button
-              onClick={() => setConfigOpen(true)}
-              className="shrink-0 text-muted hover:text-text cursor-pointer"
-              title="Configurer la connexion"
-            >
-              <IconSettings className="h-3.5 w-3.5" />
-            </button>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                onClick={() => setPanelFullscreen((v) => !v)}
+                className="text-muted hover:text-text cursor-pointer"
+                title={panelFullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+              >
+                <IconMaximize className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => setConfigOpen(true)}
+                className="text-muted hover:text-text cursor-pointer"
+                title="Configurer la connexion"
+              >
+                <IconSettings className="h-3.5 w-3.5" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -2563,16 +2838,71 @@ function DatabasePanel({ repo, onNotify }) {
       <div className="flex min-w-0 flex-1 flex-col">
         {diagramVisited && (
           <div className={mode === 'diagram' ? 'flex min-w-0 flex-1 flex-col' : 'hidden'}>
-            <SchemaDiagram repo={repo} />
+            <SchemaDiagram repo={repo} onNotify={onNotify} />
           </div>
         )}
         {mode !== 'diagram' && (mode === 'sql' ? (
           <>
             <div className="flex min-h-[57px] items-center justify-between gap-3 border-b border-border px-3 py-2">
               <span className="text-[13px] font-medium text-text">Éditeur SQL</span>
-              <Button variant="primary" onClick={runSql} disabled={sqlRunning || !sql.trim()}>
-                {sqlRunning ? 'Exécution…' : 'Exécuter'}
-              </Button>
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Button variant="ghost" onClick={() => setSnippetsOpen((v) => !v)}>
+                    <IconStar className="h-3.5 w-3.5" />
+                    Favoris
+                  </Button>
+                  {snippetsOpen && (
+                    <div
+                      className="absolute right-0 top-full z-20 mt-1 w-64 rounded-md border border-border-strong bg-surface p-1 shadow-lg"
+                      onMouseLeave={() => setSnippetsOpen(false)}
+                    >
+                      <button
+                        onClick={() => {
+                          saveSnippet()
+                          setSnippetsOpen(false)
+                        }}
+                        disabled={!sql.trim()}
+                        className="flex w-full cursor-pointer items-center gap-1.5 rounded px-2 py-1.5 text-left text-[11px] text-accent hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <IconPlus className="h-3 w-3" />
+                        Sauver la requête actuelle
+                      </button>
+                      {snippets.length === 0 ? (
+                        <p className="px-2 py-2 text-[11px] text-muted">Aucun favori.</p>
+                      ) : (
+                        snippets.map((s) => (
+                          <div key={s.name} className="flex items-center gap-1 rounded px-1 hover:bg-surface-hover">
+                            <button
+                              onClick={() => {
+                                setSql(s.sql)
+                                setSnippetsOpen(false)
+                              }}
+                              className="min-w-0 flex-1 cursor-pointer truncate py-1.5 text-left text-[11px] text-text"
+                              title={s.sql}
+                            >
+                              {s.name}
+                            </button>
+                            <button
+                              onClick={() => deleteSnippet(s.name)}
+                              className="shrink-0 cursor-pointer text-muted hover:text-danger"
+                              title="Supprimer"
+                            >
+                              <IconClose className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+                <Button variant="ghost" onClick={exportSqlResult} disabled={sqlExporting || !sqlResult?.rows}>
+                  <IconExternal className="h-3.5 w-3.5" />
+                  {sqlExporting ? 'Export…' : 'Exporter'}
+                </Button>
+                <Button variant="primary" onClick={runSql} disabled={sqlRunning || !sql.trim()}>
+                  {sqlRunning ? 'Exécution…' : 'Exécuter'}
+                </Button>
+              </div>
             </div>
             <textarea
               value={sql}
@@ -2642,10 +2972,33 @@ function DatabasePanel({ repo, onNotify }) {
                     Ligne
                   </Button>
                 )}
+                <Button
+                  variant="ghost"
+                  onClick={importFile}
+                  disabled={importing}
+                  title="Ouvre une fenêtre pour choisir un fichier .csv ou .xlsx à insérer dans cette table"
+                >
+                  <IconArrowUp className="h-3.5 w-3.5" />
+                  {importing ? 'Import…' : 'Importer CSV/Excel'}
+                </Button>
+                <Button variant="ghost" onClick={exportTable} disabled={exporting}>
+                  <IconExternal className="h-3.5 w-3.5" />
+                  {exporting ? 'Export…' : 'Exporter en Excel'}
+                </Button>
                 <button onClick={() => setReloadKey((k) => k + 1)} className="text-muted hover:text-text cursor-pointer" title="Actualiser">
                   <IconRefresh className="h-3.5 w-3.5" />
                 </button>
               </div>
+            </div>
+
+            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+              <IconSearch className="h-3.5 w-3.5 shrink-0 text-muted" />
+              <input
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+                placeholder="Rechercher dans toutes les colonnes…"
+                className="w-64 rounded-md border border-border bg-base px-2.5 py-1 text-[11px] text-text outline-none focus:border-accent"
+              />
             </div>
 
             {schema && <FilterBar columns={schema.columns} filters={filters} onChange={(f) => { setFilters(f); setOffset(0) }} />}
@@ -2668,6 +3021,11 @@ function DatabasePanel({ repo, onNotify }) {
                     editable={canSelect}
                     onCellEdit={updateCell}
                     schemaByName={schema ? Object.fromEntries(schema.columns.map((c) => [c.name, c])) : undefined}
+                    sortColumn={sortColumn}
+                    sortDir={sortDir}
+                    onSortChange={toggleSort}
+                    onDuplicateRow={canSelect ? duplicateRow : undefined}
+                    onCopyRowJson={copyRowJson}
                     draftRow={
                       insertOpen && schema
                         ? {
@@ -2872,6 +3230,7 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
   const [command, setCommand] = useState('')
   const [url, setUrl] = useState('')
   const [envText, setEnvText] = useState('')
+  const [shell, setShell] = useState('cmd')
   const [activeRunName, setActiveRunName] = useState(null)
   const [runTabOrder, setRunTabOrder] = useState([])
   const [dragRunName, setDragRunName] = useState(null)
@@ -2918,7 +3277,7 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
     return env
   }
 
-  const original = useRef({ name: '', command: '', url: '', envText: '' })
+  const original = useRef({ name: '', command: '', url: '', envText: '', shell: 'cmd' })
 
   function resetForm() {
     setEditingName(null)
@@ -2926,7 +3285,8 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
     setCommand('')
     setUrl('')
     setEnvText('')
-    original.current = { name: '', command: '', url: '', envText: '' }
+    setShell('cmd')
+    original.current = { name: '', command: '', url: '', envText: '', shell: 'cmd' }
     setFormOpen(false)
   }
 
@@ -2937,9 +3297,10 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
     setCommand(cfg.command)
     setUrl(cfg.url || '')
     setEnvText(envText)
+    setShell(cfg.shell === 'powershell' ? 'powershell' : 'cmd')
     // Snapshot so Annuler can restore, and so we can tell whether anything
     // actually changed before warning about discarding.
-    original.current = { name: cfg.name, command: cfg.command, url: cfg.url || '', envText }
+    original.current = { name: cfg.name, command: cfg.command, url: cfg.url || '', envText, shell: cfg.shell === 'powershell' ? 'powershell' : 'cmd' }
     setFormOpen(true)
   }
 
@@ -2947,6 +3308,7 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
     name !== original.current.name ||
     command !== original.current.command ||
     url !== original.current.url ||
+    shell !== original.current.shell ||
     envText !== original.current.envText
 
   function cancelForm() {
@@ -2957,7 +3319,7 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
   async function saveConfig() {
     if (!name.trim() || !command.trim()) return
     const trimmedName = name.trim()
-    const result = await api().save_run_config(repo.path, trimmedName, command.trim(), parseEnv(envText), url.trim())
+    const result = await api().save_run_config(repo.path, trimmedName, command.trim(), parseEnv(envText), url.trim(), shell)
     if (result?.error) onNotify(result.error, true)
     else {
       if (editingName && editingName !== trimmedName) {
@@ -3009,6 +3371,18 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
             placeholder="Commande (ex: npm run dev)"
             className="rounded-md border border-border bg-base px-2.5 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
           />
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-muted">Interpréteur :</span>
+            <select
+              value={shell}
+              onChange={(e) => setShell(e.target.value)}
+              className="rounded-md border border-border bg-base px-2 py-1 text-xs text-text outline-none focus:border-accent"
+              title="cmd ne comprend pas la syntaxe PowerShell (';' entre commandes, cmdlets comme Copy-Item) — choisis PowerShell si ta commande vient de là"
+            >
+              <option value="cmd">cmd</option>
+              <option value="powershell">PowerShell</option>
+            </select>
+          </div>
           <input
             value={url}
             onChange={(e) => setUrl(e.target.value)}
@@ -5642,6 +6016,150 @@ function GlobalSearchModal({ onClose, onOpenRepo, onOpenFile }) {
   )
 }
 
+function CreateRepoModal({ onClose, onNotify, onCreated }) {
+  const [hostStatus, setHostStatus] = useState(null)
+  const [provider, setProvider] = useState('github')
+  const [name, setName] = useState('')
+  const [visibility, setVisibility] = useState('private')
+  const [description, setDescription] = useState('')
+  const [parentDir, setParentDir] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api()
+      ?.check_repo_host_cli()
+      ?.then((s) => {
+        if (!s) return
+        setHostStatus(s)
+        // Default to whichever host is actually usable, so the user isn't
+        // greeted by a disabled option they'd have to notice and switch.
+        if (!s.github?.authenticated && s.gitlab?.authenticated) setProvider('gitlab')
+      })
+  }, [])
+
+  async function pickParentDir() {
+    const path = await api().pick_folder()
+    if (path) setParentDir(path)
+  }
+
+  const providerReady = hostStatus && hostStatus[provider]?.authenticated
+  const binary = provider === 'github' ? 'gh' : 'glab'
+
+  async function create() {
+    if (!name.trim() || !parentDir || busy) return
+    setBusy(true)
+    const result = await api().create_and_clone_repo(provider, name.trim(), visibility, description.trim(), parentDir)
+    setBusy(false)
+    if (result?.error) {
+      onNotify(result.error, true)
+      return
+    }
+    onNotify(`Repo "${name.trim()}" créé et cloné`)
+    onCreated()
+    onClose()
+  }
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-6" onClick={busy ? undefined : onClose}>
+      <div
+        className="w-full max-w-md rounded-xl border border-border-strong bg-surface p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Créer un repo</h2>
+          <button onClick={onClose} disabled={busy} className="text-muted hover:text-text cursor-pointer disabled:opacity-40">
+            <IconClose className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="mb-3 flex gap-2">
+          {[
+            { id: 'github', label: 'GitHub' },
+            { id: 'gitlab', label: 'GitLab' },
+          ].map((p) => {
+            const info = hostStatus?.[p.id]
+            const disabled = hostStatus && !info?.authenticated
+            return (
+              <button
+                key={p.id}
+                disabled={disabled}
+                onClick={() => setProvider(p.id)}
+                title={
+                  disabled
+                    ? info?.installed
+                      ? `Non connecté — lance "${p.id === 'github' ? 'gh' : 'glab'} auth login" dans un terminal`
+                      : `${p.id === 'github' ? 'gh' : 'glab'} introuvable`
+                    : undefined
+                }
+                className={`flex-1 rounded-md border px-3 py-1.5 text-xs cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
+                  provider === p.id ? 'border-accent bg-accent-bg text-accent' : 'border-border text-muted hover:text-text'
+                }`}
+              >
+                {p.label}
+              </button>
+            )
+          })}
+        </div>
+        {hostStatus && !providerReady && (
+          <p className="mb-3 text-[11px] text-warning">
+            {hostStatus[provider]?.installed
+              ? `Connecte-toi d'abord avec "${binary} auth login" dans un terminal.`
+              : `${binary} introuvable — installe-le puis connecte-toi.`}
+          </p>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Nom du repo"
+            className="rounded-md border border-border bg-base px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+          />
+          <input
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="Description (optionnel)"
+            className="rounded-md border border-border bg-base px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+          />
+          <div className="flex gap-2">
+            <button
+              onClick={() => setVisibility('private')}
+              className={`flex-1 rounded-md border px-3 py-1.5 text-xs cursor-pointer ${
+                visibility === 'private' ? 'border-accent bg-accent-bg text-accent' : 'border-border text-muted hover:text-text'
+              }`}
+            >
+              Privé
+            </button>
+            <button
+              onClick={() => setVisibility('public')}
+              className={`flex-1 rounded-md border px-3 py-1.5 text-xs cursor-pointer ${
+                visibility === 'public' ? 'border-accent bg-accent-bg text-accent' : 'border-border text-muted hover:text-text'
+              }`}
+            >
+              Public
+            </button>
+          </div>
+          <button
+            onClick={pickParentDir}
+            className="truncate rounded-md border border-border bg-base px-2.5 py-1.5 text-left text-xs text-muted hover:text-text cursor-pointer"
+          >
+            {parentDir || 'Choisir le dossier parent…'}
+          </button>
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
+            Annuler
+          </Button>
+          <Button variant="primary" disabled={busy || !name.trim() || !parentDir || !providerReady} onClick={create}>
+            {busy ? 'Création…' : 'Créer'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AiSettingsModal({ onClose, onNotify }) {
   const [provider, setProvider] = useState('openai')
   const [apiKey, setApiKey] = useState('')
@@ -6037,8 +6555,15 @@ function ConfirmModal({ title, message, confirmLabel = 'Confirmer', onConfirm, o
 }
 
 function TitleBar() {
+  const [maximized, setMaximized] = useState(false)
+
+  async function toggleMaximize() {
+    const result = await api()?.toggle_maximize_window()
+    if (result) setMaximized(!!result.maximized)
+  }
+
   return (
-    <div className="pywebview-drag-region flex h-8 shrink-0 items-center justify-end bg-base" onDoubleClick={() => api()?.toggle_maximize_window()}>
+    <div className="pywebview-drag-region flex h-8 shrink-0 items-center justify-end bg-base" onDoubleClick={toggleMaximize}>
       <button
         onClick={() => api()?.minimize_window()}
         className="flex h-8 w-11 cursor-pointer items-center justify-center text-muted hover:bg-surface-hover hover:text-text"
@@ -6047,11 +6572,11 @@ function TitleBar() {
         <IconWinMinimize className="h-3 w-3" />
       </button>
       <button
-        onClick={() => api()?.toggle_maximize_window()}
+        onClick={toggleMaximize}
         className="flex h-8 w-11 cursor-pointer items-center justify-center text-muted hover:bg-surface-hover hover:text-text"
-        title="Agrandir / Restaurer"
+        title={maximized ? 'Restaurer' : 'Agrandir'}
       >
-        <IconWinMaximize className="h-3 w-3" />
+        {maximized ? <IconWinRestore className="h-3 w-3" /> : <IconWinMaximize className="h-3 w-3" />}
       </button>
       <button
         onClick={() => api()?.close_window()}
@@ -6118,6 +6643,7 @@ export default function App() {
   const [logs, setLogs] = useState([])
   const [logsOpen, setLogsOpen] = useState(false)
   const [aiSettingsOpen, setAiSettingsOpen] = useState(false)
+  const [createRepoOpen, setCreateRepoOpen] = useState(false)
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [appFullscreen, setAppFullscreen] = useState(false)
@@ -6150,10 +6676,11 @@ export default function App() {
       // focused preview iframe (Processus tab) is a separate document, so
       // key events inside it never reach this window-level listener at all.
       if (e.key === 'Escape') {
-        if (globalSearchOpen || shortcutsOpen || aiSettingsOpen) {
+        if (globalSearchOpen || shortcutsOpen || aiSettingsOpen || createRepoOpen) {
           setGlobalSearchOpen(false)
           setShortcutsOpen(false)
           setAiSettingsOpen(false)
+          setCreateRepoOpen(false)
         }
         return
       }
@@ -6171,7 +6698,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [globalSearchOpen, shortcutsOpen, aiSettingsOpen])
+  }, [globalSearchOpen, shortcutsOpen, aiSettingsOpen, createRepoOpen])
   const [themeMode, setThemeMode] = useState(() => {
     try {
       return localStorage.getItem('devhub-theme') || 'dark'
@@ -6747,6 +7274,9 @@ export default function App() {
               <Button variant="ghost" onClick={scanFolder} title="Scanner un dossier" className="px-2">
                 <IconScan className="h-3.5 w-3.5" />
               </Button>
+              <Button variant="ghost" onClick={() => setCreateRepoOpen(true)} title="Créer un repo" className="px-2">
+                <IconGitCommit className="h-3.5 w-3.5" />
+              </Button>
               <Button variant="primary" onClick={addRepo} title="Ajouter un projet" className="px-2">
                 <IconPlus className="h-3.5 w-3.5" />
               </Button>
@@ -6760,6 +7290,9 @@ export default function App() {
 
       {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
       {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
+      {createRepoOpen && (
+        <CreateRepoModal onClose={() => setCreateRepoOpen(false)} onNotify={notify} onCreated={refresh} />
+      )}
       {globalSearchOpen && (
         <GlobalSearchModal
           onClose={() => setGlobalSearchOpen(false)}

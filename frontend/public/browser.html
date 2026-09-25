@@ -429,12 +429,18 @@
   document.getElementById('new-tab').onclick = function () {
     api() && api().new_tab('', null);
   };
+  var btnMax = document.getElementById('btn-max');
+  function applyMaximizedState(result) {
+    if (!result) return;
+    btnMax.textContent = result.maximized ? '❐' : '▢';
+    btnMax.title = result.maximized ? 'Restaurer' : 'Agrandir';
+  }
   document.getElementById('btn-min').onclick = function () { api() && api().minimize_window(); };
-  document.getElementById('btn-max').onclick = function () { api() && api().toggle_maximize_window(); };
+  document.getElementById('btn-max').onclick = function () { api() && api().toggle_maximize_window().then(applyMaximizedState); };
   document.getElementById('btn-close').onclick = function () { api() && api().close_window(); };
   document.getElementById('titlebar').ondblclick = function (e) {
     if (e.target.id === 'titlebar' || e.target.id === 'tabs') {
-      api() && api().toggle_maximize_window();
+      api() && api().toggle_maximize_window().then(applyMaximizedState);
     }
   };
 

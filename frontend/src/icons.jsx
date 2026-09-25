@@ -161,6 +161,15 @@ export function IconWinMaximize({ className }) {
   )
 }
 
+export function IconWinRestore({ className }) {
+  return (
+    <svg {...base} className={className}>
+      <rect x="8" y="4" width="12" height="12" rx="1" />
+      <path d="M4 8v11a1 1 0 0 0 1 1h11" />
+    </svg>
+  )
+}
+
 export function IconScan({ className }) {
   return (
     <svg {...base} className={className}>

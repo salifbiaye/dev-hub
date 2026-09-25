@@ -6,6 +6,24 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.4.0] - 2026-09-25
+
+### ✨ Nouveautés
+- Bouton "Créer un repo" : crée et clone un dépôt GitHub ou GitLab en un formulaire (nom, visibilité, description, dossier), via `gh`/`glab` déjà connectés — Dev Hub ne touche à aucun identifiant
+- Onglet BDD : export d'une table (ou du résultat d'une requête SQL) vers Excel, en respectant les filtres/recherche actifs
+- Onglet BDD : import d'un fichier CSV/Excel pour insérer des lignes en masse dans une table
+- Onglet BDD : tri par colonne (clic sur l'en-tête), recherche rapide dans toutes les colonnes
+- Onglet BDD : dupliquer une ligne (pré-remplit le formulaire d'ajout au lieu d'insérer directement, pour les tables avec identifiant obligatoire)
+- Onglet BDD : copier une ligne au format JSON
+- Onglet BDD : requêtes SQL favorites (sauvegarder/recharger/supprimer)
+- Onglet BDD : export du schéma complet en `.sql`, et export du diagramme de schéma en image (qualité conservée même avec beaucoup de tables)
+- Onglet BDD : plein écran pour tout le panneau (tables, SQL et schéma), pas seulement le diagramme
+- L'icône plein écran/restaurer de la fenêtre change maintenant réellement selon l'état (agrandie ou non), pour Dev Hub et son navigateur intégré
+
+### 🐛 Corrections
+- Recherche BDD en erreur sur une colonne de type `uuid` ("operator does not exist: uuid ~~* unknown")
+- Import CSV/Excel qui semblait ne rien faire au clic (filtre de fichier invalide, la fenêtre de sélection ne s'ouvrait jamais)
+
 ## [0.3.0] - 2026-09-18
 
 ### ✨ Nouveautés
