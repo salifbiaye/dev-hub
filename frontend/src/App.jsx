@@ -3552,6 +3552,8 @@ function ConflictResolverModal({ path, file, onClose, onSaved, onNotify }) {
   const [loading, setLoading] = useState(true)
   const [ours, setOurs] = useState(null)
   const [theirs, setTheirs] = useState(null)
+  const [oursDiff, setOursDiff] = useState(null)
+  const [theirsDiff, setTheirsDiff] = useState(null)
   const [content, setContent] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -3568,6 +3570,8 @@ function ConflictResolverModal({ path, file, onClose, onSaved, onNotify }) {
         }
         setOurs(result.ours)
         setTheirs(result.theirs)
+        setOursDiff(result.ours_diff)
+        setTheirsDiff(result.theirs_diff)
         setContent(result.current || '')
         setLoading(false)
       })
@@ -3602,21 +3606,33 @@ function ConflictResolverModal({ path, file, onClose, onSaved, onNotify }) {
       ) : (
         <div className="flex flex-1 flex-col overflow-hidden">
           <div className="flex flex-1 overflow-hidden border-b border-border">
-            <div className="flex w-1/2 flex-col border-r border-border">
+            <div className="flex w-1/2 flex-col overflow-hidden border-r border-border">
               <div className="border-b border-border px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted">
-                Actuel (HEAD)
+                Actuel (HEAD) {oursDiff?.trim() && <span className="normal-case text-muted/70">— vs base commune</span>}
               </div>
-              <pre className="flex-1 overflow-auto whitespace-pre-wrap bg-base p-3 font-mono text-[11px] text-text">
-                {ours ?? '(fichier absent de cette version)'}
-              </pre>
+              <div className="flex-1 overflow-auto">
+                {ours === null ? (
+                  <p className="px-3 py-2 text-[11px] text-muted">(fichier absent de cette version)</p>
+                ) : oursDiff?.trim() ? (
+                  <DiffView diffText={oursDiff} />
+                ) : (
+                  <pre className="whitespace-pre-wrap bg-base p-3 font-mono text-[11px] text-text">{ours}</pre>
+                )}
+              </div>
             </div>
-            <div className="flex w-1/2 flex-col">
+            <div className="flex w-1/2 flex-col overflow-hidden">
               <div className="border-b border-border px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-muted">
-                Entrant (pull)
+                Entrant (pull) {theirsDiff?.trim() && <span className="normal-case text-muted/70">— vs base commune</span>}
               </div>
-              <pre className="flex-1 overflow-auto whitespace-pre-wrap bg-base p-3 font-mono text-[11px] text-text">
-                {theirs ?? '(fichier absent de cette version)'}
-              </pre>
+              <div className="flex-1 overflow-auto">
+                {theirs === null ? (
+                  <p className="px-3 py-2 text-[11px] text-muted">(fichier absent de cette version)</p>
+                ) : theirsDiff?.trim() ? (
+                  <DiffView diffText={theirsDiff} />
+                ) : (
+                  <pre className="whitespace-pre-wrap bg-base p-3 font-mono text-[11px] text-text">{theirs}</pre>
+                )}
+              </div>
             </div>
           </div>
 
