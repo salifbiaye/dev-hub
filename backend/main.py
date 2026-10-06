@@ -10,8 +10,15 @@ import icons
 from api import Api
 from app_config import load_config
 from core.server.static_server import serve_own_ui
-from features.browser.windows import window as browser_window
 from features.window_chrome.controls import kill_all_running, start_fullscreen_watch
+
+# Windows path is unchanged; Linux gets its own simplified "one tab = one
+# window" browser module (see features/browser/linux/window.py) with the
+# same set_own_ui_base()/close_all_preview_windows() surface.
+if sys.platform == "win32":
+    from features.browser.windows import window as browser_window
+else:
+    from features.browser.linux import window as browser_window
 
 # WebView2 inherits the system/VPN proxy by default, which often has no
 # localhost bypass — that routes the preview iframe's 127.0.0.1/localhost

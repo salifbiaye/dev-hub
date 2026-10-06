@@ -1,0 +1,4 @@
+-r requirements-base.txt
+ptyprocess>=0.7
+pywebview[gtk]>=5.3
+pyperclip>=1.8

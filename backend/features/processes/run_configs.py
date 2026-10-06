@@ -1,5 +1,7 @@
 import json
 import os
+import shutil
+import sys
 import threading
 import uuid
 
@@ -60,6 +62,9 @@ def _stream_run_terminal(path, name, terminal_id, proc):
 
 
 class ProcessesRunMixin:
+    def get_shell_options(self):
+        return platform_svc.shell_options()
+
     def list_run_configs(self, path):
         config = load_config()
         repo = next((r for r in config["repos"] if r["path"] == path), None)
@@ -75,12 +80,14 @@ class ProcessesRunMixin:
         if not repo:
             return {"error": "Repo introuvable"}
         repo.setdefault("runs", [])
+        valid_shells = [o["value"] for o in platform_svc.shell_options()]
+        default_shell = valid_shells[0] if valid_shells else "cmd"
         entry = {
             "name": name,
             "command": command,
             "env": env or {},
             "url": (url or "").strip(),
-            "shell": shell if shell in ("cmd", "powershell") else "cmd",
+            "shell": shell if shell in valid_shells else default_shell,
         }
         existing = next((r for r in repo["runs"] if r["name"] == name), None)
         if existing:
@@ -148,10 +155,16 @@ class ProcessesRunMixin:
             # Copy-Item, and older Windows PowerShell (5.1) doesn't
             # understand "&&" the way cmd/pwsh 7 do — so this is a
             # per-command choice, not something to guess from the text.
-            if run_cfg.get("shell") == "powershell":
-                argv = ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", run_cfg["command"]]
+            if sys.platform == "win32":
+                if run_cfg.get("shell") == "powershell":
+                    argv = ["powershell.exe", "-NoLogo", "-NoProfile", "-Command", run_cfg["command"]]
+                else:
+                    argv = ["cmd.exe", "/c", run_cfg["command"]]
             else:
-                argv = ["cmd.exe", "/c", run_cfg["command"]]
+                shell_binary = run_cfg.get("shell") or ""
+                if not shell_binary or not shutil.which(shell_binary):
+                    shell_binary = "/bin/sh"
+                argv = [shell_binary, "-c", run_cfg["command"]]
             proc = platform_svc.spawn_pty(argv, path, env, 24, 80)
         except Exception as e:
             return {"error": str(e)}

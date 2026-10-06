@@ -3231,6 +3231,7 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
   const [url, setUrl] = useState('')
   const [envText, setEnvText] = useState('')
   const [shell, setShell] = useState('cmd')
+  const [shellOptions, setShellOptions] = useState([{ value: 'cmd', label: 'cmd' }])
   const [activeRunName, setActiveRunName] = useState(null)
   const [runTabOrder, setRunTabOrder] = useState([])
   const [dragRunName, setDragRunName] = useState(null)
@@ -3250,6 +3251,15 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
     setActiveRunName((prev) => (prev && runningNames.includes(prev) ? prev : runningNames[runningNames.length - 1] || null))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runningNamesKey])
+
+  useEffect(() => {
+    api()
+      ?.get_shell_options()
+      ?.then((options) => {
+        if (Array.isArray(options) && options.length) setShellOptions(options)
+      })
+      ?.catch(() => {})
+  }, [])
 
   async function startConfig(cfgName) {
     const cfg = configs.find((c) => c.name === cfgName)
@@ -3379,8 +3389,11 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
               className="rounded-md border border-border bg-base px-2 py-1 text-xs text-text outline-none focus:border-accent"
               title="cmd ne comprend pas la syntaxe PowerShell (';' entre commandes, cmdlets comme Copy-Item) — choisis PowerShell si ta commande vient de là"
             >
-              <option value="cmd">cmd</option>
-              <option value="powershell">PowerShell</option>
+              {shellOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
             </select>
           </div>
           <input
