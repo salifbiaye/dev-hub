@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="frontend/public/favicon.svg" width="88" height="84" alt="Dev Hub logo" />
+  <img src="backend/icon.png" width="88" height="88" alt="Dev Hub logo" />
   <h1>Dev Hub</h1>
 </div>
 
