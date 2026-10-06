@@ -4,7 +4,7 @@ Un hub desktop pour développeurs qui jonglent avec plusieurs repos, plusieurs I
 
 Construit avec **Python (pywebview)** pour le shell desktop et **React + Tailwind CSS** pour l'interface. Packagé en un seul exécutable Windows (`DevHub.exe`).
 
-<video src="docs/dev-hub-demo.mp4" controls width="100%"></video>
+<video src="https://github.com/salifbiaye/dev-hub/releases/download/v0.5.0/dev-hub-demo.mp4" controls width="100%"></video>
 
 ## Pourquoi
 
