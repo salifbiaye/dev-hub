@@ -4,6 +4,8 @@ Un hub desktop pour développeurs qui jonglent avec plusieurs repos, plusieurs I
 
 Construit avec **Python (pywebview)** pour le shell desktop et **React + Tailwind CSS** pour l'interface. Packagé en un seul exécutable Windows (`DevHub.exe`).
 
+<video src="docs/dev-hub-demo.mp4" controls width="100%"></video>
+
 ## Pourquoi
 
 Quand on a plusieurs projets (front, back, side-projects...), chacun avec son propre IDE, sa propre base de données, ses propres variables d'env et sa propre commande de lancement, on finit par perdre du temps à jongler entre fenêtres. Dev Hub centralise tout ça dans un seul endroit, avec une interface rapide et personnalisable.
@@ -97,13 +99,21 @@ L'exécutable est généré dans `backend/dist/DevHub.exe`.
 
 ```
 dev-hub/
-├── backend/          # API Python (pywebview), logique git/db/process/terminal
-│   └── main.py
-└── frontend/         # Interface React + Tailwind
+├── backend/
+│   ├── main.py              # Point d'entrée (crée la fenêtre, lance webview.start())
+│   ├── api.py                # Compose la classe Api (js_api) à partir des Mixins
+│   ├── core/
+│   │   ├── platform/          # Abstraction OS (clavier, PTY, focus fenêtre…) — windows/ et linux/
+│   │   └── server/             # Serveur HTTP local qui sert le frontend
+│   └── features/               # Un dossier par domaine : git, database, terminal,
+│                                 processes, ide, repos, repo_host, window_chrome, browser
+└── frontend/                   # Interface React + Tailwind
     └── src/
         ├── App.jsx
         └── icons.jsx
 ```
+
+Voir [CROSS_PLATFORM.md](CROSS_PLATFORM.md) pour l'état du portage Linux (en cours, v1 simplifiée côté navigateur intégré, pas encore testée sur une vraie machine Linux).
 
 ## Licence
 

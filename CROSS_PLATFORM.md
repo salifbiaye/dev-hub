@@ -1,11 +1,31 @@
-# Portage cross-platform (Mac / Linux) — notes pour plus tard
+# Portage cross-platform (Mac / Linux)
 
-Dev Hub est actuellement **Windows-only**. Ce doc liste tout ce qui est couplé à
-Windows dans le code actuel, pour servir de check-list le jour où on veut
-supporter Mac et/ou Linux. Rien de tout ça n'est fait — c'est juste un état
-des lieux.
+## État actuel
 
-## Ce qui est Windows-only aujourd'hui
+- **Windows** : support complet, c'est la plateforme de référence.
+- **Linux** : implémentation v1 faite (`backend/core/platform/linux/` +
+  `backend/features/browser/linux/`), mais **jamais testée sur une vraie
+  machine Linux** — écrite avec soin depuis un poste Windows, donc à
+  valider avant de la considérer fiable. Différences connues par rapport à
+  Windows :
+  - Le navigateur intégré est simplifié : un onglet = une fenêtre pywebview
+    classique (pas de barre d'adresse, pas d'onglets dans une seule fenêtre
+    comme sur Windows — ce style-là repose sur WebView2/WinForms, sans
+    équivalent direct en GTK/WebKit2).
+  - Le focus de fenêtre IDE déjà ouverte dépend de `wmctrl` (best-effort,
+    non garanti sous Wayland).
+  - Le raccourci F11 plein écran global n'est pas disponible (capture de
+    touche système non fiable sous X11/Wayland pour une app tierce).
+  - Détection IDE/terminaux via `shutil.which` plutôt que des chemins
+    d'installation figés.
+- **macOS** : non commencé.
+
+Build du `.exe` Windows : voir la section "Build de l'exécutable" du
+[README](README.md). Build Linux : `pip install -r backend/requirements-linux.txt`
+puis `python backend/main.py` (ou `pyinstaller backend/DevHub.linux.spec`),
+à faire directement sur une machine/VM Linux.
+
+## Ce qui était Windows-only avant le portage (pour référence)
 
 ### 1. Terminal interactif (PTY)
 - `pywinpty` (`winpty.PtyProcess`) = wrapper autour de ConPTY, Windows uniquement.
@@ -79,10 +99,11 @@ des lieux.
   nativement, donc la partie fenêtre elle-même n'est pas bloquante — le gros du
   travail est le remplacement des dépendances win32 ci-dessus.
 
-## Résumé de l'effort
+## Résumé de l'effort (historique — désormais fait pour Linux, voir "État actuel" en haut)
 
 Le cœur de l'app (React, logique de repos/groupes/env vars, config JSON,
-génération de commit IA) est déjà 100% portable — aucun changement nécessaire.
-Le travail de portage se limite à isoler les 6-7 points ci-dessus derrière un
-`if sys.platform == "win32" / "darwin" / défaut linux`, remplacer chaque appel
-win32 par son équivalent OS, et refaire un pipeline de build par OS.
+génération de commit IA) était déjà 100% portable. Le travail de portage
+s'est limité à isoler les points ci-dessus derrière `core/platform/`
+(`windows/` et `linux/`), avec un `sys.platform` check au seul endroit qui
+choisit l'implémentation. macOS suivrait le même principe (`core/platform/macos/`),
+pas encore commencé.
