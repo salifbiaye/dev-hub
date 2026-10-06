@@ -6,6 +6,15 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.5.0] - 2026-10-06
+
+### ✨ Nouveautés
+- Support Linux expérimental (v1) : presse-papier, terminal intégré, détection de process, lancement de commandes — navigateur intégré simplifié (un onglet = une fenêtre) en attendant une version complète façon Windows. Pas encore testé sur une vraie machine Linux, à prendre comme un premier jet
+- Résolution de conflits : diff coloré (ajouts/suppressions) entre la version actuelle et entrante par rapport à la base commune, au lieu de deux blocs de texte brut
+
+### 🐛 Corrections
+- Commit qui refusait de passer dès qu'un fichier supprimé était coché ("pathspec did not match any files")
+
 ## [0.4.0] - 2026-09-25
 
 ### ✨ Nouveautés
