@@ -1,4 +1,7 @@
-# Dev Hub
+<div align="center">
+  <img src="frontend/public/favicon.svg" width="88" height="84" alt="Dev Hub logo" />
+  <h1>Dev Hub</h1>
+</div>
 
 Un hub desktop pour développeurs qui jonglent avec plusieurs repos, plusieurs IDE et plusieurs projets à la fois — une seule fenêtre pour tout centraliser : ouverture d'IDE, git, bases de données, variables d'environnement, lancement de serveurs de dev, et sessions IA (Claude Code / Codex).
 
