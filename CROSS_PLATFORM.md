@@ -25,6 +25,21 @@ Build du `.exe` Windows : voir la section "Build de l'exécutable" du
 puis `python backend/main.py` (ou `pyinstaller backend/DevHub.linux.spec`),
 à faire directement sur une machine/VM Linux.
 
+## Hubi (fenêtre flottante)
+
+Tout ce qui est spécifique à l'OS passe par les méthodes `overlay_*`,
+`cursor_pos`, `left_button_down` et `idle_seconds` de `platform_svc`
+(`core/platform/*/overlay.py`).
+
+- **Windows** : implémenté en `ctypes` (Win32). Transparence par clé de couleur
+  quasi noire, `WS_EX_NOACTIVATE` + `WS_EX_TOOLWINDOW`, `HWND_TOPMOST` réaffirmé
+  toutes les 2 s. **À valider sur une vraie machine** : transparence des coins,
+  absence de vol de focus, comportement au-dessus d'une appli plein écran.
+- **Linux** : best-effort GTK/X11, **jamais testé**. Pas de lecture globale du
+  curseur sous Wayland ; sans `xdotool` / `xprintidle`, les yeux ne suivent pas
+  le curseur et ne s'endorment pas, et le glisser passe par la page.
+- **macOS** : non commencé.
+
 ## Ce qui était Windows-only avant le portage (pour référence)
 
 ### 1. Terminal interactif (PTY)

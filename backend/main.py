@@ -10,6 +10,8 @@ import icons
 from api import Api
 from app_config import load_config
 from core.server.static_server import serve_own_ui
+from features.hubi import api as hubi_api
+from features.hubi import window as hubi_window
 from features.window_chrome.controls import kill_all_running, start_fullscreen_watch
 
 # Windows path is unchanged; Linux gets its own simplified "one tab = one
@@ -43,7 +45,8 @@ def main():
     dev_url = os.environ.get("DEV_HUB_DEV_URL")
     if dev_url:
         target = dev_url
-        browser_window.set_own_ui_base(dev_url.rstrip("/"))
+        ui_base = dev_url.rstrip("/")
+        browser_window.set_own_ui_base(ui_base)
     else:
         base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent.parent
         dist_dir = base / "frontend" / "dist"
@@ -56,6 +59,7 @@ def main():
         # page. Matching hostnames puts both under the same site.
         own_ui_base = f"http://localhost:{own_port}"
         browser_window.set_own_ui_base(own_ui_base)
+        ui_base = own_ui_base
         target = f"{own_ui_base}/index.html"
 
     window = webview.create_window(
@@ -71,6 +75,16 @@ def main():
     )
     window.events.closing += kill_all_running
     window.events.closing += browser_window.close_all_preview_windows
+
+    # Hubi (floating eyes) is opt-in: config.json "hubi": {"enabled": true},
+    # or DEV_HUB_HUBI=1 for a one-off run. Its page is served from the same
+    # place as Dev Hub's own UI. It must be created *after* the main window:
+    # the rest of the app addresses the main window as webview.windows[0].
+    hubi_window.configure(ui_base)
+    if os.environ.get("DEV_HUB_HUBI") == "1" or hubi_window.is_enabled():
+        hubi_api.start()
+    # Closing Dev Hub's window must not leave Hubi (and its tray icon) behind.
+    window.events.closed += hubi_api.stop
 
     # Stale WebView2 profile dirs from past launches otherwise only get
     # cleaned when someone happens to open Processus and click the button —
@@ -90,6 +104,7 @@ def main():
     # storage_path broke the JS API bridge in the frozen build (the window
     # rendered but window.pywebview.api never appeared, so nothing loaded).
     webview.start()
+    hubi_api.stop()
 
 
 if __name__ == "__main__":

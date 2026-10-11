@@ -87,6 +87,58 @@ class PlatformService(ABC):
     def get_dpi_scale(self, win):
         ...
 
+    # -- floating overlay window (Hubi) --------------------------------------
+    # All coordinates here are *physical* pixels, so the same numbers can be
+    # compared between the cursor, the window rect and the screen without any
+    # per-call DPI juggling; overlay_dpi_scale() converts to/from CSS pixels.
+    @abstractmethod
+    def overlay_prepare(self, win):
+        """One-time setup of a frameless, transparent, always-on-top widget
+        window: keep it out of the taskbar/Alt-Tab, never let it take focus,
+        and make its transparent areas truly click-through. Returns True on
+        success."""
+
+    @abstractmethod
+    def overlay_rect(self, win):
+        """(x, y, w, h) of the window in physical pixels, or None."""
+
+    @abstractmethod
+    def overlay_set_rect(self, win, x=None, y=None, w=None, h=None):
+        """Move and/or resize the window (physical pixels). None = keep."""
+
+    @abstractmethod
+    def overlay_set_visible(self, win, visible):
+        """Show (without stealing focus) or hide the window."""
+
+    @abstractmethod
+    def overlay_keep_on_top(self, win):
+        """Re-assert the topmost z-order (full-screen apps can bury it)."""
+
+    @abstractmethod
+    def overlay_dpi_scale(self, win):
+        """Physical pixels per CSS pixel for this window (1.0 = 96 dpi)."""
+
+    @abstractmethod
+    def overlay_screen(self):
+        """{"primary": (w, h), "virtual": (x, y, w, h)} in physical pixels."""
+
+    @abstractmethod
+    def overlay_native_drag(self):
+        """True when cursor_pos() and left_button_down() are reliable, so the
+        widget can be dragged by Python without help from the page."""
+
+    @abstractmethod
+    def cursor_pos(self):
+        """Global mouse position (x, y) in physical pixels, or None."""
+
+    @abstractmethod
+    def left_button_down(self):
+        """Whether the left mouse button is currently held, or None."""
+
+    @abstractmethod
+    def idle_seconds(self):
+        """Seconds since the last keyboard/mouse input anywhere, or None."""
+
     # -- misc --------------------------------------------------------------
     @abstractmethod
     def shell_options(self):

@@ -6,6 +6,9 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+### ✨ Nouveautés
+- Hubi (bêta, désactivé par défaut) : un petit compagnon aux yeux animés qui flotte en haut à droite de l'écran, toujours au-dessus, sans voler le focus. 14 humeurs (normal, somnolent, endormi, sursaut, excité, rire, concentré, iris-circuit, peur, erreur, écoute, compris, alerte, content), regard qui suit le curseur, clignements, sommeil après 60 s d'inactivité, rire au clic, déplaçable à la souris, tailles S/M/L/XL, icône de zone de notification avec menu. Les yeux prennent la couleur d'accent du thème Dev Hub (alerte ambre, erreur rouge et content vert gardent leur couleur). À activer avec `"hubi": {"enabled": true}` dans `config.json`, `DEV_HUB_HUBI=1`, ou seul avec `python backend/hubi_main.py`
+
 ## [0.5.0] - 2026-10-06
 
 ### ✨ Nouveautés

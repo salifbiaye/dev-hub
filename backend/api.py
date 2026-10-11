@@ -3,6 +3,7 @@ composes every feature's Mixin into one flat class, exactly as before."""
 from features.browser.api import BrowserMixin
 from features.database.api import DatabaseMixin
 from features.git.api import GitMixin
+from features.hubi.api import HubiMixin
 from features.ide.api import IdeMixin
 from features.processes.api import ProcessesMixin
 from features.repo_host.api import RepoHostMixin
@@ -21,5 +22,6 @@ class Api(
     ReposMixin,
     WindowChromeMixin,
     BrowserMixin,
+    HubiMixin,
 ):
     pass
