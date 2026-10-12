@@ -4856,10 +4856,18 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
 
   async function generateCommitMessage() {
     setGenerating(true)
-    const result = await api().generate_commit_message(repo.path, genLanguage, Array.from(selectedFiles))
-    if (result?.error) onNotify(result.error, true)
-    else setMessage(result.message)
-    setGenerating(false)
+    try {
+      const result = await api().generate_commit_message(repo.path, genLanguage, Array.from(selectedFiles))
+      if (result?.error) onNotify(result.error, true)
+      else setMessage(result.message)
+    } catch (e) {
+      // Without this, any JS-bridge-level failure (not a {error} dict from
+      // Python, but the promise itself rejecting) left the button stuck on
+      // "Génération..." forever — setGenerating(false) below never ran.
+      onNotify(`Génération : ${e?.message || e}`, true)
+    } finally {
+      setGenerating(false)
+    }
   }
 
   const loadAll = useCallback(async (forceFetch = false) => {

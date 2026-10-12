@@ -24,26 +24,45 @@ def call_cli(cli_command, prompt, cwd):
         # that and failed with "The command line is too long." Both bundled
         # presets (claude -p, codex exec) read the prompt from stdin when no
         # positional argument is given.
-        result = subprocess.run(
+        proc = subprocess.Popen(
             argv,
             cwd=cwd,
             shell=True,
-            input=prompt,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=90,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
     except FileNotFoundError:
         raise RuntimeError(f"Commande '{argv[0]}' introuvable dans le PATH.")
+
+    try:
+        stdout, stderr = proc.communicate(input=prompt, timeout=90)
     except subprocess.TimeoutExpired:
+        # shell=True runs argv[0] (claude/codex, often a .cmd shim) as a
+        # *child* of cmd.exe, not as proc itself — subprocess.run's own
+        # timeout handling only kills that direct child (cmd.exe), leaving
+        # the real CLI process (e.g. claude.cmd -> node.exe) alive and still
+        # holding the stdout/stderr pipes open. A second communicate() call
+        # to collect output after that then blocks forever waiting for those
+        # pipes to close, so the timeout never actually surfaced to the
+        # caller — this is what "Génération..." stuck forever was. Killing
+        # the whole process tree by PID actually closes the pipes.
+        from core.platform import platform_svc
+
+        platform_svc.kill_process_tree(proc.pid)
+        try:
+            proc.communicate(timeout=5)
+        except Exception:
+            pass
         raise RuntimeError("La commande CLI a mis trop de temps à répondre.")
 
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "La commande CLI a échoué")
-    return result.stdout.strip()
+    if proc.returncode != 0:
+        raise RuntimeError((stderr or "").strip() or (stdout or "").strip() or "La commande CLI a échoué")
+    return (stdout or "").strip()
 
 
 def _post_json(url, headers, payload, timeout=30):
