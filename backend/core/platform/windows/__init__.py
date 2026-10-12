@@ -8,6 +8,7 @@ from . import clipboard as _clipboard
 from . import dpi as _dpi
 from . import hotkeys as _hotkeys
 from . import icon as _icon
+from . import overlay as _overlay
 from . import process_control as _process_control
 from . import pty as _pty
 from . import window_focus as _window_focus
@@ -108,6 +109,40 @@ class WindowsPlatform(base.PlatformService):
 
     def get_dpi_scale(self, win_form):
         return _dpi.get_dpi_scale(win_form)
+
+    # -- floating overlay window (Hubi) --------------------------------------
+    def overlay_prepare(self, win):
+        return _overlay.prepare(win)
+
+    def overlay_rect(self, win):
+        return _overlay.rect(win)
+
+    def overlay_set_rect(self, win, x=None, y=None, w=None, h=None):
+        return _overlay.set_rect(win, x, y, w, h)
+
+    def overlay_set_visible(self, win, visible):
+        return _overlay.set_visible(win, visible)
+
+    def overlay_keep_on_top(self, win):
+        return _overlay.keep_on_top(win)
+
+    def overlay_dpi_scale(self, win):
+        return _overlay.dpi_scale(win)
+
+    def overlay_screen(self):
+        return _overlay.screen()
+
+    def overlay_native_drag(self):
+        return True
+
+    def cursor_pos(self):
+        return _overlay.cursor_pos()
+
+    def left_button_down(self):
+        return _overlay.left_button_down()
+
+    def idle_seconds(self):
+        return _overlay.idle_seconds()
 
     # -- misc --------------------------------------------------------------
     def shell_options(self):

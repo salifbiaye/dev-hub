@@ -3,5 +3,6 @@ psycopg2-binary>=2.9
 pymysql>=1.1
 pymongo>=4.6
 Pillow>=10.0
+pystray>=0.19
 psutil>=6.0
 openpyxl>=3.1

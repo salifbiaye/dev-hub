@@ -4,7 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/gen-hubi-themes.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/gen-hubi-themes.mjs",
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview"

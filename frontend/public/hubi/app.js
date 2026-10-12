@@ -1,0 +1,237 @@
+/* Hubi — comportement : sommeil, curiosité, clic, glisser, humeurs forcées.
+ *
+ * Le pont Python (window.pywebview.api) fournit la position du curseur et
+ * l'inactivité globales ; sans pont (aperçu dans un navigateur), le curseur
+ * est pris sur la page et rien ne dort.
+ */
+;(function () {
+  'use strict'
+
+  const SLEEPY_AFTER = 60 // s sans activité clavier/souris
+  const ASLEEP_AFTER = 66 // 6 s après « somnolent »
+  const EXCITED_DISTANCE = 160 // px logiques entre le curseur et le widget
+  const CLICK_MOVE_MAX = 4 // px : en dessous, c'est un clic, pas un glisser
+  const POLL_MS = 33
+
+  const canvas = document.getElementById('c')
+  const eyes = HubiEyes.createEyes(canvas)
+
+  let base = 'normal' // humeur persistante (forcée depuis le menu ou plus tard par les sessions)
+  let overlay = null // { name, until } : humeur temporaire
+  let idle = 0
+  let sleeping = false
+  let cursor = null // { x, y } relatifs au centre du widget, en px logiques
+  let lastReported = ''
+  let current = 'normal'
+  let theme = null // thème Dev Hub suivi (null = cyan d'origine)
+  let themeMap = null
+
+  function api() {
+    return window.pywebview && window.pywebview.api ? window.pywebview.api : null
+  }
+
+  // ------------------------------------------------------------ humeurs
+
+  function setMood(name, ms) {
+    if (!HubiEyes.MOOD_NAMES.includes(name)) return
+    const duration = ms !== undefined && ms !== null ? ms : HubiEyes.TRANSIENT_MS[name]
+    if (duration) {
+      overlay = { name, until: performance.now() + duration }
+    } else {
+      overlay = null
+      base = name
+    }
+  }
+
+  function derivedMood() {
+    const now = performance.now()
+    if (overlay) {
+      if (now < overlay.until) return overlay.name
+      overlay = null
+    }
+    if (base !== 'normal') return base
+    if (sleeping) return idle >= ASLEEP_AFTER ? 'asleep' : 'sleepy'
+    if (cursor) {
+      const halfW = window.innerWidth / 2
+      const halfH = window.innerHeight / 2
+      const dx = Math.max(Math.abs(cursor.x) - halfW, 0)
+      const dy = Math.max(Math.abs(cursor.y) - halfH, 0)
+      if (Math.hypot(dx, dy) < EXCITED_DISTANCE) return 'excited'
+    }
+    return 'normal'
+  }
+
+  function updateSleep() {
+    const shouldSleep = base === 'normal' && idle >= SLEEPY_AFTER
+    if (sleeping && !shouldSleep && idle < SLEEPY_AFTER) {
+      // Réveil en sursaut.
+      sleeping = false
+      setMood('startle')
+    } else {
+      sleeping = shouldSleep
+    }
+  }
+
+  // ------------------------------------------------------------ couleur du thème
+
+  function hexToRgb(hex) {
+    const m = /^#([0-9a-f]{6})$/i.exec(hex || '')
+    if (!m) return null
+    const n = parseInt(m[1], 16)
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255]
+  }
+
+  async function applyTheme(name) {
+    theme = name
+    if (!name) {
+      eyes.setBaseColor(null)
+      return
+    }
+    if (!themeMap) {
+      try {
+        themeMap = await (await fetch('hubi/themes.json')).json()
+      } catch (e) {
+        themeMap = {}
+      }
+    }
+    if (theme === name) eyes.setBaseColor(hexToRgb(themeMap[name]))
+  }
+
+  // ------------------------------------------------------------ boucle de rendu
+
+  let lastFrame = performance.now()
+  function frame(now) {
+    const dt = (now - lastFrame) / 1000
+    lastFrame = now
+
+    updateSleep()
+    const mood = derivedMood()
+    if (mood !== current) {
+      current = mood
+      eyes.setMood(mood)
+    }
+    if (mood !== lastReported) {
+      lastReported = mood
+      const a = api()
+      if (a) a.report_mood(mood)
+    }
+
+    if (cursor) {
+      // Le regard suit la direction du curseur, sans dépendre de la taille de l'écran.
+      eyes.setLook(cursor.x / 300, cursor.y / 200)
+    } else {
+      eyes.setLook(0, 0)
+    }
+    eyes.step(dt)
+    eyes.render()
+    requestAnimationFrame(frame)
+  }
+
+  function resize() {
+    const dpr = window.devicePixelRatio || 1
+    const w = Math.max(1, Math.round(window.innerWidth * dpr))
+    const h = Math.max(1, Math.round(window.innerHeight * dpr))
+    // Le canvas garde le ratio 400:240 ; la fenêtre est déjà en 5:3.
+    canvas.width = w
+    canvas.height = Math.round((w * HubiEyes.H) / HubiEyes.W)
+  }
+  window.addEventListener('resize', resize)
+  resize()
+
+  // ------------------------------------------------------------ pont Python
+
+  let polling = false
+  async function poll() {
+    const a = api()
+    if (!a) return
+    const started = performance.now()
+    try {
+      const res = await a.poll()
+      if (res) {
+        idle = res.idle == null ? 0 : res.idle
+        cursor = res.cursor ? { x: res.cursor[0], y: res.cursor[1] } : null
+        const wanted = res.theme || null
+        if (wanted !== theme) applyTheme(wanted)
+        for (const cmd of res.cmds || []) {
+          if (cmd[0] === 'mood') setMood(cmd[1], cmd[2])
+        }
+      }
+    } catch (e) {
+      // Le pont peut disparaître pendant la fermeture : on réessaie plus tard.
+    }
+    setTimeout(poll, Math.max(0, POLL_MS - (performance.now() - started)))
+  }
+
+  function startPolling() {
+    if (polling) return
+    polling = true
+    poll()
+  }
+
+  if (api()) {
+    startPolling()
+  } else {
+    window.addEventListener('pywebviewready', startPolling)
+    // Aperçu dans un navigateur : le curseur est pris sur la page.
+    window.addEventListener('mousemove', function (e) {
+      if (api()) return
+      cursor = { x: e.clientX - window.innerWidth / 2, y: e.clientY - window.innerHeight / 2 }
+    })
+  }
+
+  // ------------------------------------------------------------ clic et glisser
+
+  let dragging = false
+  let fallback = null // { sx, sy } si le glisser natif n'existe pas
+
+  canvas.addEventListener('pointerdown', async function (e) {
+    if (e.button !== 0) return
+    dragging = true
+    canvas.setPointerCapture(e.pointerId)
+    const a = api()
+    if (!a) {
+      fallback = null
+      return
+    }
+    const res = await a.drag_start()
+    fallback = res && res.native === false ? { sx: e.screenX, sy: e.screenY } : null
+  })
+
+  canvas.addEventListener('pointermove', function (e) {
+    if (!dragging || !fallback) return
+    const a = api()
+    if (!a) return
+    a.move_by(e.screenX - fallback.sx, e.screenY - fallback.sy)
+    fallback.sx = e.screenX
+    fallback.sy = e.screenY
+  })
+
+  async function endPointer() {
+    if (!dragging) return
+    dragging = false
+    const a = api()
+    let moved = 0
+    if (a) {
+      const res = await a.drag_result()
+      moved = res && res.moved ? res.moved : 0
+    }
+    if (moved < CLICK_MOVE_MAX) {
+      // Un clic réveille en sursaut, sinon fait rire.
+      if (sleeping) {
+        sleeping = false
+        setMood('startle')
+      } else {
+        setMood('laugh')
+      }
+    }
+  }
+  canvas.addEventListener('pointerup', endPointer)
+  canvas.addEventListener('pointercancel', endPointer)
+
+  canvas.addEventListener('contextmenu', function (e) {
+    e.preventDefault()
+  })
+
+  window.hubi = { setMood, eyes }
+  requestAnimationFrame(frame)
+})()
