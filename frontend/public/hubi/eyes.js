@@ -535,10 +535,13 @@
 
 
     // ---------------------------------------------------------------- hibou
-    // Tout est dessiné en code, teinté par la couleur courante des yeux
-    // (accent du thème, ou ambre/rouge/vert selon l'humeur). Les couches
-    // bougent à des vitesses différentes selon la direction du regard, ce qui
-    // donne un petit effet de profondeur.
+    // Petit hibou à grosse tête, posé sur une branche dans le cadre noir.
+    // Tout est dessiné en code et teinté par la couleur courante des yeux
+    // (accent du thème, ou ambre/rouge/vert selon l'humeur). Les yeux sont
+    // ceux des 14 humeurs, simplement réduits (EYE_SCALE) pour tenir dans la tête.
+
+    const EYE_SCALE = 0.78
+    const EYE_CENTER_Y = 96 // où tombe cy = 100 (centre des yeux) sur le cadre
 
     function shade(f, a) {
       return 'rgba(' + Math.round(params.r_ * f) + ',' + Math.round(params.g_ * f) + ',' + Math.round(params.b_ * f) + ',' + (a === undefined ? 1 : a) + ')'
@@ -547,130 +550,164 @@
     function cream(a) {
       // Bec : la couleur courante très éclaircie.
       const m = (v) => Math.round(v + (255 - v) * 0.78)
-      return 'rgba(' + m(params.r_) + ',' + m(params.g_) + ',' + m(params.b_) + ',' + a + ')'
+      return 'rgba(' + m(params.r_) + ',' + m(params.g_) + ',' + m(params.b_) + ',' + (a === undefined ? 1 : a) + ')'
     }
 
-    function drawTuft(side, lx, lift, spread) {
-      const x = side * (W / 2 - 48) // base extérieure de la houppe
-      const apexY = Math.max(2, 8 - lift)
+    function radial(cx, cy, r, inner, outer) {
+      const g = ctx.createRadialGradient(cx, cy - r * 0.25, r * 0.1, cx, cy, r)
+      g.addColorStop(0, inner)
+      g.addColorStop(1, outer)
+      return g
+    }
+
+    // Style sobre : silhouettes sombres sans contour, légèrement plus claires
+    // que le cadre noir, avec un liseré de lumière sur le dessus ; seuls les
+    // yeux brillent vraiment.
+
+    function vgrad(y0, y1, top, bottom) {
+      const g = ctx.createLinearGradient(0, y0, 0, y1)
+      g.addColorStop(0, top)
+      g.addColorStop(1, bottom)
+      return g
+    }
+
+    function rim(drawPath, alpha) {
+      // Liseré lumineux : un trait fin qui s'efface sur les côtés et le bas.
       ctx.save()
-      ctx.translate(W / 2 + lx - side * 0 + side * spread * 0.5, 0)
-      ctx.fillStyle = shade(0.36)
-      ctx.strokeStyle = shade(1, 0.3)
-      ctx.lineWidth = 2.5
-      ctx.lineJoin = 'round'
-      ctx.beginPath()
-      ctx.moveTo(x * 1 + 0, 84)
-      ctx.quadraticCurveTo(x * 1.02, apexY + 24, x * 0.9, apexY)
-      ctx.quadraticCurveTo(x * 0.55, apexY + 8, x * 0.42, 44)
-      ctx.closePath()
-      ctx.fill()
+      ctx.strokeStyle = vgrad(0, 120, shade(1, alpha), shade(1, 0))
+      ctx.lineWidth = 2
+      ctx.lineCap = 'round'
+      drawPath()
       ctx.stroke()
       ctx.restore()
     }
 
-    function drawWing(side, flapAmp, spread) {
+    function drawBranch() {
       ctx.save()
-      const shoulderX = W / 2 + side * 168 + side * spread
-      const shoulderY = 150
-      ctx.translate(shoulderX, shoulderY)
-      ctx.rotate(side * (0.12 + Math.sin(t * 11) * flapAmp * 0.22 + (flapAmp > 0 ? Math.sin(t * 17) * flapAmp * 0.05 : 0)))
-      ctx.fillStyle = shade(0.34)
-      ctx.strokeStyle = shade(1, 0.35)
-      ctx.lineWidth = 2.5
-      ctx.beginPath()
-      ctx.ellipse(0, 52, 30, 64, 0, 0, Math.PI * 2)
-      ctx.fill()
-      ctx.stroke()
-      // Plumes de l'aile.
       ctx.lineCap = 'round'
-      for (let i = 0; i < 3; i++) {
+      ctx.strokeStyle = '#1d150f'
+      ctx.lineWidth = 13
+      ctx.beginPath()
+      ctx.moveTo(-14, 224)
+      ctx.quadraticCurveTo(200, 217, 414, 226)
+      ctx.stroke()
+      // Brindille et deux feuilles discrètes.
+      ctx.lineWidth = 4
+      ctx.beginPath()
+      ctx.moveTo(330, 222)
+      ctx.quadraticCurveTo(352, 214, 364, 196)
+      ctx.stroke()
+      ctx.fillStyle = shade(0.26)
+      for (const [x, y, rot] of [[366, 194, -1.0], [356, 208, -0.1]]) {
+        ctx.save()
+        ctx.translate(x, y)
+        ctx.rotate(rot)
         ctx.beginPath()
-        ctx.moveTo(-14 + i * 14, 34 + i * 4)
-        ctx.lineTo(-14 + i * 14, 90 - i * 6)
-        ctx.stroke()
+        ctx.ellipse(8, 0, 12, 5, 0, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
       }
       ctx.restore()
     }
 
-    function drawChest(lx) {
+    function drawFeet() {
       ctx.save()
-      ctx.translate(lx, 0)
-      ctx.strokeStyle = shade(1, 0.2)
-      ctx.lineWidth = 3.5
+      ctx.strokeStyle = shade(0.55)
+      ctx.lineWidth = 4
       ctx.lineCap = 'round'
-      for (let row = 0; row < 3; row++) {
-        const y = 180 + row * 22
-        const off = row % 2 ? 18 : 0
-        for (let x = 62 + off; x <= 338; x += 36) {
+      for (const x of [176, 224]) {
+        for (const a of [-0.5, 0, 0.5]) {
           ctx.beginPath()
-          ctx.moveTo(x - 14, y)
-          ctx.quadraticCurveTo(x, y + 14, x + 14, y)
+          ctx.moveTo(x, 212)
+          ctx.lineTo(x + Math.sin(a) * 11, 212 + Math.cos(a) * 9)
           ctx.stroke()
         }
       }
       ctx.restore()
     }
 
-    function drawOwlBack(lx, ly, shakeX, bounceY) {
-      const a = params.owl
-      if (a < 0.01) return
-      const p = params
+    function drawWing(side, flapAmp, spread) {
       ctx.save()
-      ctx.globalAlpha = a
-      // Tout le hibou s'affaisse quand il somnole.
-      ctx.translate(shakeX * 0.6, p.sink + bounceY * 0.5)
-
-      // Houppes d'oreilles.
-      drawTuft(-1, lx * 0.3, p.tuft, p.spread)
-      drawTuft(1, lx * 0.3, p.tuft, p.spread)
-
-      // Tête et corps : une ellipse prolongée jusqu'en bas du panneau.
-      ctx.save()
-      ctx.translate(W / 2 + lx * 0.2, 134)
-      ctx.scale(p.puff, p.puff)
-      ctx.fillStyle = shade(0.26)
+      ctx.translate(200 + side * 68, 158)
+      const swing = Math.sin(t * 11) * flapAmp * 0.25 + (flapAmp > 0 ? Math.sin(t * 17) * flapAmp * 0.05 : 0)
+      ctx.rotate(side * (0.14 + swing + spread * 0.045))
+      ctx.fillStyle = shade(0.13)
       ctx.beginPath()
-      ctx.ellipse(0, 0, 186, 112, 0, 0, Math.PI * 2)
+      ctx.ellipse(0, 26, 19, 44, 0, 0, Math.PI * 2)
       ctx.fill()
-      ctx.fillRect(-186, 0, 372, 130)
-      ctx.restore()
-
-      // Ailes, sur les flancs de la tête.
-      drawWing(-1, p.flap, p.spread)
-      drawWing(1, p.flap, p.spread)
-
-      drawChest(lx * 0.2)
-
-      // Disques faciaux autour des yeux : ils suivent le regard à demi-vitesse.
-      const dx = lx * 0.55
-      const dy = ly * 0.5
-      const discR = 78 + Math.max(0, p.h - 120) * 0.35
-      for (const side of [-1, 1]) {
-        const cx = W / 2 + side * Math.max(60, p.sep / 2) + dx
-        ctx.save()
-        ctx.fillStyle = shade(0.42)
-        ctx.strokeStyle = shade(1, 0.4)
-        ctx.lineWidth = 3
-        ctx.beginPath()
-        ctx.arc(cx, 102 + dy, discR, 0, Math.PI * 2)
-        ctx.fill()
-        ctx.stroke()
-        ctx.restore()
-      }
       ctx.restore()
     }
 
-    function drawOwlBeak(lx, ly, shakeX, bounceY) {
-      const a = params.owl
-      if (a < 0.01) return
+    function drawBody() {
+      ctx.save()
+      ctx.fillStyle = vgrad(144, 228, shade(0.2), shade(0.1))
+      ctx.beginPath()
+      ctx.ellipse(200, 184, 78, 44, 0, 0, Math.PI * 2)
+      ctx.fill()
+      // Ventre un peu plus clair.
+      ctx.fillStyle = shade(0.2, 0.7)
+      ctx.beginPath()
+      ctx.ellipse(200, 192, 42, 32, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+    }
+
+    function drawTuft(side, lift, spread) {
+      const apexY = Math.max(2, 14 - lift)
+      ctx.save()
+      ctx.translate(200 + side * (96 + spread * 0.4), 0)
+      const path = () => {
+        ctx.beginPath()
+        ctx.moveTo(-side * 36, 46)
+        ctx.quadraticCurveTo(side * 6, apexY + 28, side * 14, apexY)
+        ctx.quadraticCurveTo(side * 36, apexY + 18, side * 34, 54)
+        ctx.closePath()
+      }
+      ctx.fillStyle = shade(0.2)
+      path()
+      ctx.fill()
+      ctx.restore()
+    }
+
+    function drawHead(ly, lx) {
+      const p = params
+      // Tête : silhouette sombre + liseré lumineux sur le dessus.
+      ctx.save()
+      ctx.fillStyle = vgrad(14, 186, shade(0.22), shade(0.12))
+      ctx.beginPath()
+      ctx.ellipse(200, 100, 130, 86, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.restore()
+      rim(() => {
+        ctx.beginPath()
+        ctx.ellipse(200, 100, 129, 85, 0, Math.PI * 1.08, Math.PI * 1.92)
+      }, 0.5)
+
+      // Disques faciaux : un peu plus clairs, sans contour, doux autour des yeux.
+      const discR = 61 + Math.max(0, p.h - 120) * 0.28
+      const sepHalf = Math.max(48, (p.sep * EYE_SCALE) / 2)
+      for (const side of [-1, 1]) {
+        const cx = 200 + side * sepHalf + lx * 0.4
+        const cy = EYE_CENTER_Y + ly * 0.4
+        ctx.save()
+        const g = ctx.createRadialGradient(cx, cy, discR * 0.35, cx, cy, discR)
+        g.addColorStop(0, shade(0.3))
+        g.addColorStop(1, shade(0.2, 0))
+        ctx.fillStyle = g
+        ctx.beginPath()
+        ctx.arc(cx, cy, discR, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+      }
+    }
+
+    function drawBeak(lx, ly) {
       const p = params
       ctx.save()
-      ctx.globalAlpha = a
-      ctx.translate(W / 2 + lx * 0.75 + shakeX * 0.6, 119 + ly * 0.6 + p.sink + bounceY * 0.5)
+      ctx.translate(200 + lx * 0.7, 113 + ly * 0.5)
+      ctx.scale(0.72, 0.72)
       ctx.shadowColor = shade(1, 0.5)
-      ctx.shadowBlur = 8
-      // Bec du haut : petit crochet.
+      ctx.shadowBlur = 6
       ctx.fillStyle = cream(1)
       ctx.beginPath()
       ctx.moveTo(-17, 0)
@@ -695,6 +732,55 @@
         ctx.fill()
       }
       ctx.restore()
+    }
+
+    function drawOwlScene(lx, ly, shakeX, shakeY, bounceY, w, h, cy) {
+      const p = params
+      drawBranch()
+
+      ctx.save()
+      // Le hibou entier saute (rire, excité) ; la branche reste en place.
+      ctx.translate(shakeX * 0.6, bounceY)
+      drawFeet()
+      drawBody()
+      drawWing(-1, p.flap, p.spread)
+      drawWing(1, p.flap, p.spread)
+
+      // Tête : s'affaisse (somnolent), se gonfle (peur), s'incline vers le curseur.
+      ctx.save()
+      ctx.translate(0, p.sink)
+      ctx.translate(200, 168)
+      ctx.rotate(lookX * 0.05 * p.look)
+      ctx.scale(p.puff, p.puff)
+      ctx.translate(-200, -168)
+      drawTuft(-1, p.tuft, p.spread)
+      drawTuft(1, p.tuft, p.spread)
+      drawHead(ly * EYE_SCALE, lx * EYE_SCALE)
+
+      // Les yeux des humeurs, réduits pour tenir dans les disques faciaux.
+      ctx.save()
+      ctx.translate(200, EYE_CENTER_Y)
+      ctx.scale(EYE_SCALE, EYE_SCALE)
+      ctx.translate(-200, -100)
+      const half = p.sep / 2
+      drawEye(-1, W / 2 - half + lx + shakeX, cy, w, h)
+      drawEye(1, W / 2 + half + lx + shakeX, cy, w, h)
+      ctx.restore()
+
+      drawBeak(lx * EYE_SCALE, ly * EYE_SCALE)
+      ctx.restore() // tête
+
+      // Accessoires tenus devant le ventre (par-dessus la tête qui s'affaisse).
+      ctx.save()
+      ctx.translate(200, 198)
+      ctx.scale(0.78, 0.78)
+      ctx.translate(-200, -196)
+      drawNotepad(W / 2, 196)
+      drawThumb(W / 2 - 4, 188)
+      ctx.restore()
+      ctx.restore() // hibou
+
+      drawZzz()
     }
 
     function render() {
@@ -723,19 +809,19 @@
       const w = p.w * pulse
       const h = p.h * pulse * (1 - 0.9 * blink)
 
-      drawOwlBack(lx, ly, shakeX, bounceY)
-
-      const cy = p.cy + ly + shakeY + bounceY + p.sink * p.owl
-      const half = p.sep / 2
-      drawEye(-1, W / 2 - half + lx + shakeX, cy, w, h)
-      drawEye(1, W / 2 + half + lx + shakeX, cy, w, h)
-
-      drawOwlBeak(lx, ly, shakeX, bounceY)
-      // Sans corps de hibou (mascotte « yeux seuls »), l'ancienne bouche.
-      if (p.owl < 0.5) drawMouth(W / 2 + lx * 0.4 + shakeX, 187 + bounceY)
-      drawZzz()
-      drawNotepad(W / 2, 196)
-      drawThumb(W / 2 - 4, 188)
+      if (p.owl > 0.5) {
+        drawOwlScene(lx, ly, shakeX, shakeY, bounceY, w, h, p.cy + ly + shakeY)
+      } else {
+        // Mascotte « yeux seuls ».
+        const cy = p.cy + ly + shakeY + bounceY
+        const half = p.sep / 2
+        drawEye(-1, W / 2 - half + lx + shakeX, cy, w, h)
+        drawEye(1, W / 2 + half + lx + shakeX, cy, w, h)
+        drawMouth(W / 2 + lx * 0.4 + shakeX, 187 + bounceY)
+        drawZzz()
+        drawNotepad(W / 2, 196)
+        drawThumb(W / 2 - 4, 188)
+      }
 
       ctx.restore()
     }
