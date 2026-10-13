@@ -1,6 +1,6 @@
 # Hubi : suivre l'utilisateur d'un bureau virtuel à l'autre, et pouvoir le fermer / rouvrir
 
-Statut : **à faire** (note de conception, rien n'est encore codé).
+Statut : **en partie fait** — « visible sur tous les bureaux » (piste 1, `core/platform/windows/virtual_desktop.py`, réglage sur la page Hubi de Dev Hub) et fermer / rouvrir depuis Dev Hub. Reste : clic droit sur la mascotte, épinglage (piste 2) si le délai gêne.
 Branche : `feat/hubi-mascotte`.
 
 ## Le problème

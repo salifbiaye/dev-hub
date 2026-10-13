@@ -66,6 +66,7 @@ class HubiMixin:
             "sizes": list(window.SIZES),
             "follow_theme": window.follows_theme(),
             "sound": window.sound_enabled(),
+            "all_desktops": window.all_desktops(),
             "codex_installed": codex_watch.ROOT.exists(),
             "codex_notify": codex_watch.notify_flag(),
             # The agent chosen in Paramètres IA, and whether Hubi follows it.
@@ -104,6 +105,10 @@ class HubiMixin:
             window.set_follow_theme(bool(value))
         elif key == "sound":
             window.set_sound(bool(value))
+        elif key == "all_desktops":
+            config = load_config()
+            config.setdefault("hubi", {})["all_desktops"] = bool(value)
+            save_config(config)
         elif key == "codex_notify":
             config = load_config()
             config.setdefault("hubi", {})["codex_notify"] = bool(value)

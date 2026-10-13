@@ -160,6 +160,15 @@ class WindowsPlatform(base.PlatformService):
     def overlay_dpi_scale(self, win):
         return _overlay.dpi_scale(win)
 
+    def overlay_follow_desktops(self, win, enabled):
+        from . import virtual_desktop
+
+        form = _overlay._form(win)
+        if form is None:
+            return False
+        virtual_desktop.follow(form.Handle.ToInt64(), enabled)
+        return True
+
     def overlay_screen(self):
         return _overlay.screen()
 

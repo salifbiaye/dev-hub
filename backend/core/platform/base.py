@@ -114,6 +114,11 @@ class PlatformService(ABC):
     def overlay_keep_on_top(self, win):
         """Re-assert the topmost z-order (full-screen apps can bury it)."""
 
+    def overlay_follow_desktops(self, win, enabled):
+        """Keep the window on the virtual desktop being shown while
+        `enabled()` is true. No-op where unsupported."""
+        return False
+
     @abstractmethod
     def overlay_dpi_scale(self, win):
         """Physical pixels per CSS pixel for this window (1.0 = 96 dpi)."""

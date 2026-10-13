@@ -232,6 +232,12 @@ export function HubiPage({ hubi, onState, onClose, onNotify, onOpenTasks, onOpen
                 ))}
               </div>
             </Row>
+            <Row
+              title="Visible sur tous les bureaux"
+              hint="Quand tu changes de bureau virtuel (Win+Ctrl+flèches), Hubi te suit au même coin de l'écran."
+            >
+              <Switch checked={hubi.all_desktops !== false} disabled={busy === 'all_desktops'} onChange={(v) => setOption('all_desktops', v)} />
+            </Row>
             <Row title="Couleurs du thème Dev Hub" hint="La tablette de Hubi prend la couleur d'accent de ton thème.">
               <Switch checked={!!hubi.follow_theme} disabled={busy === 'follow_theme'} onChange={(v) => setOption('follow_theme', v)} />
             </Row>

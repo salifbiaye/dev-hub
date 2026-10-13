@@ -80,6 +80,7 @@ def _cfg():
         "visible": bool(cfg.get("visible", True)),
         "follow_theme": bool(cfg.get("follow_theme", True)),
         "sound": bool(cfg.get("sound", True)),
+        "all_desktops": bool(cfg.get("all_desktops", True)),
         "mascot": cfg.get("mascot") if cfg.get("mascot") in dict(MASCOTS) else DEFAULT_MASCOT,
         "x": cfg.get("x"),
         "y": cfg.get("y"),
@@ -134,6 +135,10 @@ def follows_theme():
 def set_follow_theme(value):
     _save(follow_theme=bool(value))
     _theme_cache["at"] = 0.0  # let the next poll pick it up immediately
+
+
+def all_desktops():
+    return _cfg()["all_desktops"]
 
 
 def sound_enabled():
@@ -231,6 +236,11 @@ def _on_shown():
         from . import process
 
         platform_svc.apply_window_icon(_window, str(process._hubi_icon_path()))
+    except Exception:
+        pass
+    # Follow the user from one virtual desktop to another (Win+Ctrl+arrows).
+    try:
+        platform_svc.overlay_follow_desktops(_window, all_desktops)
     except Exception:
         pass
     _apply_geometry()
