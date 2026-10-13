@@ -12,6 +12,7 @@ kernel32 = ctypes.windll.kernel32
 
 GWL_EXSTYLE = -20
 WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_LAYERED = 0x00080000
 WS_EX_NOACTIVATE = 0x08000000
 
 HWND_TOPMOST = -1
@@ -31,10 +32,6 @@ SM_XVIRTUALSCREEN = 76
 SM_YVIRTUALSCREEN = 77
 SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
-
-# Near-black, not pure black: the widget's own panel is pure black, so only
-# the (1, 0, 1) padding around its rounded corners is keyed out.
-_KEY_RGB = (1, 0, 1)
 
 user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 user32.GetWindowRect.restype = wintypes.BOOL
@@ -82,17 +79,19 @@ def prepare(win):
     form = _form(win)
     if form is None:
         return False
+    # No color-key transparency (TransparencyKey / WS_EX_LAYERED) on purpose:
+    # it never reached WebView2's content — the square corners around the
+    # rounded face stayed a gray box — and it made the whole widget
+    # click-through (hit-testing fell to the window underneath), so it could
+    # not be dragged or clicked. Instead the face fills the window and
+    # Windows 11 rounds the window itself (DWM clips the whole window,
+    # WebView2 content included).
     try:
         from System import Func, Type
         from System.Drawing import Color
 
-        key = Color.FromArgb(255, *_KEY_RGB)
-
         def _setup():
-            # pywebview keys out pure red; swap to a near-black key so
-            # anti-aliased corner pixels fade to black instead of pink.
-            form.BackColor = key
-            form.TransparencyKey = key
+            form.BackColor = Color.Black
 
         form.Invoke(Func[Type](_setup))
     except Exception:
@@ -104,14 +103,71 @@ def prepare(win):
         # TOOLWINDOW keeps the widget out of the taskbar and Alt-Tab;
         # NOACTIVATE (already set by pywebview's focus=False) keeps it from
         # ever stealing the keyboard focus.
-        user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE)
+        style = (style | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE) & ~WS_EX_LAYERED
+        user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style)
         # The taskbar only re-reads the style on a hide/show cycle.
         user32.ShowWindow(hwnd, SW_HIDE)
         user32.ShowWindow(hwnd, SW_SHOWNOACTIVATE)
         user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+        _dwm_round_no_border(hwnd)
         return True
     except Exception:
         return False
+
+
+def force_foreground(win):
+    """Give `win` the keyboard focus even though this process is in the
+    background (Windows' foreground lock otherwise leaves the focus in
+    whatever app was active, so Escape and typing went there)."""
+    hwnd = _hwnd(win)
+    if not hwnd:
+        return False
+    try:
+        kernel32 = ctypes.windll.kernel32
+        fg = user32.GetForegroundWindow()
+        fg_thread = user32.GetWindowThreadProcessId(fg, None)
+        me = kernel32.GetCurrentThreadId()
+        attached = fg_thread and fg_thread != me and user32.AttachThreadInput(fg_thread, me, True)
+        try:
+            user32.BringWindowToTop(wintypes.HWND(hwnd))
+            user32.SetForegroundWindow(wintypes.HWND(hwnd))
+            user32.SetFocus(wintypes.HWND(hwnd))
+        finally:
+            if attached:
+                user32.AttachThreadInput(fg_thread, me, False)
+        return user32.GetForegroundWindow() == hwnd
+    except Exception:
+        return False
+
+
+def round_corners(win, border_rgb=None):
+    hwnd = _hwnd(win)
+    if not hwnd:
+        return False
+    try:
+        dwm = ctypes.windll.dwmapi
+        round_ = ctypes.c_uint(2)  # DWMWCP_ROUND
+        dwm.DwmSetWindowAttribute(wintypes.HWND(hwnd), 33, ctypes.byref(round_), ctypes.sizeof(round_))
+        if border_rgb:
+            r, g, b = border_rgb
+            color = ctypes.c_uint(r | (g << 8) | (b << 16))  # COLORREF 0x00BBGGRR
+            dwm.DwmSetWindowAttribute(wintypes.HWND(hwnd), 34, ctypes.byref(color), ctypes.sizeof(color))
+        return True
+    except Exception:
+        return False
+
+
+def _dwm_round_no_border(hwnd):
+    # Windows 11 only (silently ignored on 10): native rounded corners, and
+    # no thin gray outline around the widget.
+    try:
+        dwm = ctypes.windll.dwmapi
+        round_ = ctypes.c_uint(2)  # DWMWCP_ROUND
+        dwm.DwmSetWindowAttribute(wintypes.HWND(hwnd), 33, ctypes.byref(round_), ctypes.sizeof(round_))
+        none = ctypes.c_uint(0xFFFFFFFE)  # DWMWA_COLOR_NONE
+        dwm.DwmSetWindowAttribute(wintypes.HWND(hwnd), 34, ctypes.byref(none), ctypes.sizeof(none))
+    except Exception:
+        pass
 
 
 def rect(win):

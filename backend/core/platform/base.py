@@ -149,3 +149,41 @@ class PlatformService(ABC):
     def ide_dirs(self):
         """OS-specific directories/roots used for IDE detection (e.g.
         %LOCALAPPDATA%/JetBrains on Windows)."""
+
+    def enable_native_frame(self, win):
+        """Make a frameless window a regular OS window (snap, edge resize)
+        while keeping the page's own title bar. No-op where unsupported."""
+        return False
+
+    def is_window_maximized(self, win):
+        """True/False from the OS, or None if unknown here."""
+        return None
+
+    def force_foreground(self, win):
+        """Take the keyboard focus for `win` from a background process."""
+        return False
+
+    def show_dim_overlay(self, owner_win, on_click=None):
+        """Darken the whole screen behind a launcher-style window. No-op
+        where unsupported."""
+        return False
+
+    def hide_dim_overlay(self):
+        return False
+
+    def round_window_corners(self, win, border_rgb=None):
+        """OS-rounded corners for a frameless window (Windows 11), with an
+        optional thin border color (r, g, b). No-op where unsupported."""
+        return False
+
+    def start_native_drag(self, win):
+        """Hand a title-bar drag of `win` to the OS's own window-move loop.
+        Returns False where unsupported (the page then keeps pywebview's
+        JS-driven drag)."""
+        return False
+
+    def start_global_hotkey(self, combo, callback):
+        """System-wide hotkey such as "ctrl+alt+h" calling `callback` (from a
+        background thread). Returns a stop() function, or None when
+        unsupported or already taken."""
+        return None

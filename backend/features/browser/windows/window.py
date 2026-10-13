@@ -174,6 +174,12 @@ def ensure_browser_window():
     #      support rather than ship a broken resize.
     # Not worth a third attempt without a way to test interactively.
     _apply_browser_window_icon(win, load_config().get("theme", "dark"))
+    # The snap attempts described above are superseded by
+    # core/platform/windows/snap.py. Applied right away: created after
+    # webview.start(), this window's form already exists here (the icon call
+    # above relies on that too), and its "shown" event has typically already
+    # fired by the time a handler could be attached.
+    platform_svc.enable_native_frame(win)
 
     def _on_closing():
         global _browser_window, _browser_api

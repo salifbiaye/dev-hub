@@ -74,6 +74,7 @@ class ReposSettingsMixin:
         threading.Thread(target=icons.apply_window_icon, args=(config["theme"],), daemon=True).start()
         if browser_window._browser_window is not None:
             threading.Thread(target=browser_window.push_theme_to_browser_window, daemon=True).start()
+        threading.Thread(target=save_theme_vars_snapshot, daemon=True).start()
         return {"ok": True}
 
     def get_ai_settings(self):
@@ -120,3 +121,18 @@ class ReposSettingsMixin:
         except Exception as e:
             return {"error": str(e)}
         return {"path": dest}
+
+
+def save_theme_vars_snapshot():
+    """Store the main window's resolved theme colors in config, for windows
+    of other processes (Hubi's quick-add bar) that can't read Dev Hub's CSS."""
+    import time
+
+    from features.browser.history import read_theme_vars
+
+    time.sleep(0.2)  # let the new data-theme attribute apply first
+    theme_vars = read_theme_vars()
+    if theme_vars:
+        config = load_config()
+        config["theme_vars"] = theme_vars
+        save_config(config)

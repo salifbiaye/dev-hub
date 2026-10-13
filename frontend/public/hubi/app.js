@@ -26,6 +26,14 @@
   let theme = null // thème Dev Hub suivi (null = cyan d'origine)
   let themeMap = null
 
+  // Bulle : « collante » (question en attente, minuteur fini) tant qu'on ne
+  // clique pas, ou temporaire ; la temporaire passe devant.
+  let sticky = null // { text, tone }
+  let transient = null // { text, tone, until }
+  let bubbleAlpha = 0
+  let timer = null // { end, label } (end en ms epoch)
+  let openTasks = 0
+
   function api() {
     return window.pywebview && window.pywebview.api ? window.pywebview.api : null
   }
@@ -124,7 +132,64 @@
     }
     eyes.step(dt)
     eyes.render()
+    drawHud(dt)
     requestAnimationFrame(frame)
+  }
+
+  // ------------------------------------------------------------ bulle et badges
+
+  function currentBubble() {
+    if (transient && performance.now() >= transient.until) transient = null
+    return transient || sticky
+  }
+
+  let lastBubble = null
+  function drawHud(dt) {
+    const ctx = canvas.getContext('2d')
+    const accent = eyes.getBaseColor()
+    const bubble = currentBubble()
+    if (bubble) lastBubble = bubble
+    const k = 1 - Math.exp(-dt * 12)
+    bubbleAlpha += ((bubble ? 1 : 0) - bubbleAlpha) * k
+    eyes.setSqueeze(!!bubble)
+    if (bubbleAlpha > 0.02 && lastBubble) {
+      HubiHud.drawBubble(ctx, lastBubble.text, lastBubble.tone, accent, bubbleAlpha)
+    }
+    if (timer) {
+      const left = timer.end - Date.now()
+      const color = left < 60000 ? HubiHud.TONES.warn : accent
+      HubiHud.drawBadge(ctx, HubiHud.formatRemaining(left), false, color)
+    }
+    if (openTasks > 0) {
+      HubiHud.drawBadge(ctx, String(openTasks), true, accent, 'check')
+    }
+  }
+
+  function bubbleVisible() {
+    return !!currentBubble()
+  }
+
+  function handleCommand(cmd) {
+    switch (cmd[0]) {
+      case 'mood':
+        setMood(cmd[1], cmd[2])
+        break
+      case 'bubble':
+        transient = cmd[1] ? { text: cmd[1], tone: cmd[3] || 'info', until: performance.now() + (cmd[2] || 6000) } : null
+        break
+      case 'sticky':
+        sticky = cmd[1] ? { text: cmd[1], tone: cmd[2] || 'warn' } : null
+        break
+      case 'timer':
+        timer = cmd[1] ? { end: cmd[1], label: cmd[2] || '' } : null
+        break
+      case 'tasks':
+        openTasks = cmd[1] || 0
+        break
+      case 'beep':
+        HubiHud.beep(cmd[1])
+        break
+    }
   }
 
   function resize() {
@@ -152,9 +217,7 @@
         cursor = res.cursor ? { x: res.cursor[0], y: res.cursor[1] } : null
         const wanted = res.theme || null
         if (wanted !== theme) applyTheme(wanted)
-        for (const cmd of res.cmds || []) {
-          if (cmd[0] === 'mood') setMood(cmd[1], cmd[2])
-        }
+        for (const cmd of res.cmds || []) handleCommand(cmd)
       }
     } catch (e) {
       // Le pont peut disparaître pendant la fermeture : on réessaie plus tard.
@@ -186,6 +249,7 @@
 
   canvas.addEventListener('pointerdown', async function (e) {
     if (e.button !== 0) return
+    HubiHud.unlockAudio()
     dragging = true
     canvas.setPointerCapture(e.pointerId)
     const a = api()
@@ -216,8 +280,13 @@
       moved = res && res.moved ? res.moved : 0
     }
     if (moved < CLICK_MOVE_MAX) {
-      // Un clic réveille en sursaut, sinon fait rire.
-      if (sleeping) {
+      // Un clic ferme la bulle (et acquitte l'alerte), réveille en sursaut,
+      // sinon fait rire.
+      if (bubbleVisible()) {
+        transient = null
+        sticky = null
+        if (a) a.dismiss()
+      } else if (sleeping) {
         sleeping = false
         setMood('startle')
       } else {
@@ -232,6 +301,6 @@
     e.preventDefault()
   })
 
-  window.hubi = { setMood, eyes }
+  window.hubi = { setMood, eyes, handleCommand }
   requestAnimationFrame(frame)
 })()

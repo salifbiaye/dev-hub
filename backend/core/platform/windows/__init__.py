@@ -6,15 +6,30 @@ from pathlib import Path
 from .. import base
 from . import clipboard as _clipboard
 from . import dpi as _dpi
+from . import global_hotkey as _global_hotkey
 from . import hotkeys as _hotkeys
 from . import icon as _icon
 from . import overlay as _overlay
 from . import process_control as _process_control
 from . import pty as _pty
+from . import snap as _snap
+from . import window_drag as _window_drag
 from . import window_focus as _window_focus
 
 
 class WindowsPlatform(base.PlatformService):
+    def start_native_drag(self, win):
+        return _window_drag.start_native_drag(win)
+
+    def start_global_hotkey(self, combo, callback):
+        return _global_hotkey.start(combo, callback)
+
+    def enable_native_frame(self, win):
+        return _snap.enable_native_frame(win)
+
+    def is_window_maximized(self, win):
+        return _snap.is_maximized(win)
+
     # -- clipboard ---------------------------------------------------
     def clipboard_copy(self, text):
         return _clipboard.clipboard_copy(text)
@@ -113,6 +128,22 @@ class WindowsPlatform(base.PlatformService):
     # -- floating overlay window (Hubi) --------------------------------------
     def overlay_prepare(self, win):
         return _overlay.prepare(win)
+
+    def round_window_corners(self, win, border_rgb=None):
+        return _overlay.round_corners(win, border_rgb)
+
+    def force_foreground(self, win):
+        return _overlay.force_foreground(win)
+
+    def show_dim_overlay(self, owner_win, on_click=None):
+        from . import dim_overlay
+
+        return dim_overlay.show(owner_win, on_click)
+
+    def hide_dim_overlay(self):
+        from . import dim_overlay
+
+        return dim_overlay.hide()
 
     def overlay_rect(self, win):
         return _overlay.rect(win)

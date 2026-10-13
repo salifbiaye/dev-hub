@@ -9,7 +9,7 @@
 
   const W = 400
   const H = 240
-  const PANEL_RADIUS = 30
+  const PANEL_RADIUS = 0 // the window itself is rounded by Windows 11 (see overlay.py)
 
   const CYAN = [0, 229, 255]
   const AMBER = [255, 193, 7]
@@ -41,6 +41,7 @@
     shake: 0, // amplitude de tremblement (px)
     pulse: 0, // amplitude de pulsation (échelle)
     bounce: 0, // amplitude de rebond (px)
+    squeeze: 0, // 0..1 : yeux réduits vers le haut pour laisser la place à la bulle
     r_: CYAN[0],
     g_: CYAN[1],
     b_: CYAN[2],
@@ -54,7 +55,7 @@
     excited: { w: 106, h: 134, sep: 150, cy: 102, r: 38, bounce: 5 },
     laugh: { arc: 1, cy: 68, mouth: 1, bounce: 6, look: 0 },
     focused: { h: 112, cy: 108, lid: 0.27, slant: 38, look: 0.5 },
-    acting: { w: 112, h: 119, sep: 156, cy: 104, r: 38, iris: 1, lid: 0.08, slant: 14, hi: 0, look: 0.4 },
+    acting: { w: 112, h: 119, sep: 156, cy: 104, r: 38, iris: 1, lid: 0, slant: 0, hi: 0, look: 0.4 },
     fear: { w: 46, h: 60, sep: 132, cy: 99, r: 14, shake: 3, glow: 14, look: 0.4 },
     error: { cross: 1, cy: 100, r_: RED[0], g_: RED[1], b_: RED[2], look: 0 },
     listening: { h: 100, cy: 76, notepad: 1, look: 0.4 },
@@ -152,12 +153,23 @@
     let baseColor = CYAN
     let alertRing = false
     let moodName = 'normal'
+    let squeezeTarget = 0
 
     function setMood(name) {
       moodName = PRESETS[name] ? name : 'normal'
       const tint = { r_: baseColor[0], g_: baseColor[1], b_: baseColor[2] }
       target = Object.assign({}, BASE, tint, PRESETS[moodName])
       if (moodName === 'alert' && alertRing) target.ring = 1
+      target.squeeze = squeezeTarget
+    }
+
+    function setSqueeze(on) {
+      squeezeTarget = on ? 1 : 0
+      target.squeeze = squeezeTarget
+    }
+
+    function getBaseColor() {
+      return baseColor
     }
 
     function setBaseColor(rgb) {
@@ -476,6 +488,23 @@
         ctx.lineTo(-26 + 50 * lens[i] * grow, -13 + i * 12)
         ctx.stroke()
       }
+      // Crayon qui suit la ligne en cours d'écriture.
+      const line = Math.floor(t * 1.4) % 3
+      const grow = 0.55 + 0.45 * Math.abs(Math.sin(t * 2.2 + line * 1.3))
+      const px = -26 + 50 * lens[line] * grow
+      const py = -13 + line * 12 + Math.sin(t * 18) * 1.2
+      ctx.save()
+      ctx.translate(px, py)
+      ctx.rotate(-0.75)
+      ctx.fillStyle = colorStr(1)
+      ctx.fillRect(0, -3, 22, 6)
+      ctx.beginPath()
+      ctx.moveTo(0, -3)
+      ctx.lineTo(-7, 0)
+      ctx.lineTo(0, 3)
+      ctx.closePath()
+      ctx.fill()
+      ctx.restore()
       // Mains.
       ctx.fillStyle = colorStr(1)
       ctx.beginPath()
@@ -533,6 +562,13 @@
       ctx.fill()
       ctx.clip()
 
+      if (p.squeeze > 0.001) {
+        const s = 1 - 0.38 * p.squeeze
+        ctx.translate(W / 2, 6 * p.squeeze)
+        ctx.scale(s, s)
+        ctx.translate(-W / 2, 0)
+      }
+
       // Effets dynamiques communs.
       const shakeX = p.shake > 0.01 ? (Math.sin(t * 61) + Math.sin(t * 37 + 1)) * 0.5 * p.shake : 0
       const shakeY = p.shake > 0.01 ? (Math.sin(t * 53 + 2) + Math.sin(t * 29)) * 0.5 * p.shake * 0.6 : 0
@@ -559,7 +595,7 @@
       ctx.restore()
     }
 
-    return { setMood, setBaseColor, setLook, step, render, snap, params }
+    return { setMood, setBaseColor, getBaseColor, setSqueeze, setLook, step, render, snap, params }
   }
 
   global.HubiEyes = { createEyes, MOOD_NAMES, TRANSIENT_MS, W, H, hueClose }

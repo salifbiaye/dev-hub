@@ -15,8 +15,8 @@ import webview
 from app_config import load_config, save_config
 from core.platform import platform_svc
 
-SIZES = {"S": (250, 150), "M": (340, 204), "L": (450, 270), "XL": (600, 360)}
-DEFAULT_SIZE = "M"
+SIZES = {"S": (180, 108), "M": (250, 150), "L": (340, 204), "XL": (450, 270)}
+DEFAULT_SIZE = "S"
 MARGIN = 16  # logical px from the top-right corner of the primary screen
 TOPMOST_EVERY = 2.0  # s between z-order refreshes (full-screen apps bury it)
 
@@ -46,6 +46,11 @@ _mood = "normal"
 _mood_listeners = []
 _last_topmost = 0.0
 
+# The page polls ~30x/s. If it goes silent, its renderer died (the window then
+# stays up but black): reload the page.
+WATCHDOG_SILENCE = 8.0
+_last_poll = {"at": None}
+
 # poll() runs ~30x/s; the theme name comes from config.json, so it is re-read
 # at most once per THEME_REFRESH seconds.
 THEME_REFRESH = 1.5
@@ -67,6 +72,7 @@ def _cfg():
         "size": size if size in SIZES else DEFAULT_SIZE,
         "visible": bool(cfg.get("visible", True)),
         "follow_theme": bool(cfg.get("follow_theme", True)),
+        "sound": bool(cfg.get("sound", True)),
         "x": cfg.get("x"),
         "y": cfg.get("y"),
     }
@@ -111,6 +117,14 @@ def follows_theme():
 def set_follow_theme(value):
     _save(follow_theme=bool(value))
     _theme_cache["at"] = 0.0  # let the next poll pick it up immediately
+
+
+def sound_enabled():
+    return _cfg()["sound"]
+
+
+def set_sound(value):
+    _save(sound=bool(value))
 
 
 def on_mood_change(callback):
@@ -192,6 +206,28 @@ def _on_shown():
     _apply_geometry()
     if not _cfg()["visible"]:
         platform_svc.overlay_set_visible(_window, False)
+    threading.Thread(target=_watchdog, daemon=True).start()
+
+
+def _watchdog():
+    _last_poll["at"] = time.monotonic()
+    while _window is not None:
+        time.sleep(2.0)
+        win = _window
+        if win is None:
+            return
+        # A hidden page has its timers throttled by Chromium: silence is normal.
+        if not _cfg()["visible"]:
+            _last_poll["at"] = time.monotonic()
+            continue
+        if time.monotonic() - _last_poll["at"] > WATCHDOG_SILENCE:
+            _last_poll["at"] = time.monotonic()  # give the reload time to come up
+            try:
+                # A fresh query string: setting WebView2's Source to the URL it
+                # already has is a no-op, even after its renderer crashed.
+                win.load_url(f"{_base_url}/hubi.html?r={int(time.time())}")
+            except Exception:
+                pass
 
 
 def _on_closed():
@@ -221,9 +257,11 @@ def create():
         shadow=False,
         focus=False,
         on_top=True,
-        transparent=True,
+        # Not transparent: the face fills the window and Windows rounds it
+        # (core/platform/windows/overlay.py). pywebview's transparent mode
+        # also calls Activate() when the page loads, stealing the focus.
         resizable=False,
-        min_size=(200, 100),
+        min_size=(150, 90),
         background_color="#000000",
         text_select=False,
     )
@@ -258,8 +296,13 @@ def send_mood(name, ms=None):
     session events). `ms` None = the page's own default duration."""
     if name not in MOOD_NAMES:
         return
+    push_cmd("mood", name, ms)
+
+
+def push_cmd(*cmd):
+    """Queue a command for the page's next poll (bubble, timer, beep…)."""
     with _lock:
-        _cmds.append(["mood", name, ms])
+        _cmds.append(list(cmd))
 
 
 # ---------------------------------------------------------------- bridge for the page
@@ -313,6 +356,7 @@ class HubiApi:
         if win is None:
             return None
         now = time.monotonic()
+        _last_poll["at"] = now
         if now - _last_topmost > TOPMOST_EVERY:
             _last_topmost = now
             platform_svc.overlay_keep_on_top(win)
@@ -333,6 +377,12 @@ class HubiApi:
             "theme": _current_theme(),
             "cmds": cmds,
         }
+
+    def dismiss(self):
+        """Click on Hubi while a bubble or an alert is showing."""
+        from . import reactions
+
+        reactions.dismiss()
 
     def report_mood(self, name):
         if name in MOOD_NAMES:

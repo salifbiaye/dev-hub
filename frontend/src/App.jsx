@@ -92,6 +92,8 @@ import {
   IconPalette,
   IconPlay,
 } from './icons'
+import { CodeEditor, FilePreview, draftStore, previewKindForFile } from './codeEditor'
+import { HubiTasksModal } from './hubiTasks'
 
 function api() {
   return window.pywebview?.api
@@ -1371,8 +1373,8 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
   )
 }
 
-function EmbeddedTerminal({ repo, sessionId, onNotify, onBack }) {
-  const startFn = useRef(() => api().start_terminal(repo.path, sessionId)).current
+function EmbeddedTerminal({ repo, sessionId, prompt, onNotify, onBack }) {
+  const startFn = useRef(() => api().start_terminal(repo.path, sessionId, prompt || null)).current
   const [fullscreen, setFullscreen] = useState(false)
 
   return (
@@ -1404,12 +1406,24 @@ function EmbeddedTerminal({ repo, sessionId, onNotify, onBack }) {
   )
 }
 
-function AiSessionsPanel({ repo, onNotify }) {
+// Launch requests already turned into a terminal: the panel can remount
+// (tab switches), and must not start the same task twice.
+const consumedTaskLaunches = new Set()
+
+function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
   const [aiSettings, setAiSettings] = useState(null)
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeSession, setActiveSession] = useState(undefined)
   const [search, setSearch] = useState('')
+  const [launch, setLaunch] = useState(null) // { prompt, key }
+
+  useEffect(() => {
+    if (!taskLaunch || taskLaunch.path !== repo.path || consumedTaskLaunches.has(taskLaunch.nonce)) return
+    consumedTaskLaunches.add(taskLaunch.nonce)
+    setLaunch({ prompt: taskLaunch.prompt, key: taskLaunch.nonce })
+    setActiveSession(taskLaunch.sessionId ?? null)
+  }, [taskLaunch, repo.path])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -1431,10 +1445,15 @@ function AiSessionsPanel({ repo, onNotify }) {
   if (activeSession !== undefined) {
     return (
       <EmbeddedTerminal
+        key={launch?.key ?? `session-${activeSession}`}
         repo={repo}
         sessionId={activeSession}
+        prompt={launch?.prompt}
         onNotify={onNotify}
-        onBack={() => setActiveSession(undefined)}
+        onBack={() => {
+          setActiveSession(undefined)
+          setLaunch(null)
+        }}
       />
     )
   }
@@ -1585,8 +1604,8 @@ function Select({ value, onChange, options, className, menuClassName, placeholde
     function onDocClick(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false)
     }
-    document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
+    document.addEventListener('mousedown', onDocClick, true)
+    return () => document.removeEventListener('mousedown', onDocClick, true)
   }, [])
 
   const current = options.find((o) => o.value === value)
@@ -4344,6 +4363,72 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   const containerRef = useRef(null)
   const searchInputRef = useRef(null)
 
+  // Code (read-only, diff-aware) / Aperçu (rendered md/html) / Modifier.
+  const previewKind = previewKindForFile(file)
+  const draftKey = `${repo.path}::${file}`
+  const [mode, setMode] = useState(() => (draftStore.get(draftKey) != null ? 'edit' : previewKind === 'md' ? 'preview' : 'code'))
+  const [raw, setRaw] = useState(null)
+  const [draft, setDraft] = useState(() => draftStore.get(draftKey) ?? null)
+  const [saving, setSaving] = useState(false)
+  const [reloadKey, setReloadKey] = useState(0)
+  const dirty = draft != null && raw != null && draft !== raw
+
+  useEffect(() => {
+    if (draft == null || raw == null) return
+    if (draft !== raw) draftStore.set(draftKey, draft)
+    else draftStore.clear(draftKey)
+  }, [draft, raw, draftKey])
+
+  // The raw text (preview/edit need it even when the Code view shows a diff).
+  useEffect(() => {
+    if (mode === 'code' || raw != null) return
+    let alive = true
+    api()
+      .read_file_content(repo.path, file)
+      .then((r) => {
+        if (!alive) return
+        if (r?.content != null) setRaw(r.content)
+        else {
+          onNotify(r?.error || 'Fichier non modifiable ici', true)
+          setMode('code')
+        }
+      })
+    return () => {
+      alive = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, raw, repo.path, file])
+
+  useEffect(() => {
+    if (mode === 'edit' && raw != null && draft == null) setDraft(raw)
+  }, [mode, raw, draft])
+
+  function switchMode(next) {
+    if (mode === 'edit' && next !== 'edit' && dirty && !window.confirm('Abandonner les modifications non enregistrées ?')) return
+    if (mode === 'edit' && next !== 'edit') {
+      setDraft(null)
+      draftStore.clear(draftKey)
+    }
+    setMode(next)
+  }
+
+  async function save() {
+    if (draft == null || saving) return
+    setSaving(true)
+    const r = await api().write_file_content(repo.path, file, draft)
+    setSaving(false)
+    if (r?.error) {
+      onNotify(r.error, true)
+      return
+    }
+    setRaw(draft)
+    draftStore.clear(draftKey)
+    setReloadKey((k) => k + 1)
+    onNotify('Fichier enregistré')
+  }
+
+  const highlight = useCallback((line) => highlightLine(line, prismLangForFile(file)), [file])
+
   // Ctrl+F actually focuses the search box instead of just being a hint in
   // the placeholder. Scoped to when this viewer is the visible one (its
   // container isn't sitting under a hidden tab) so it doesn't steal the
@@ -4384,6 +4469,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
           if (!alive) return
           if (r?.content != null) {
             setContent(r.content)
+            setRaw(r.content)
             setMeta(null)
           } else {
             setContent(null)
@@ -4396,7 +4482,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
     return () => {
       alive = false
     }
-  }, [repo.path, file, hasChanges])
+  }, [repo.path, file, hasChanges, reloadKey])
 
   // One shape for both modes — plain content becomes "context" rows with
   // no diff type, so search/highlight/rendering below doesn't need to
@@ -4432,8 +4518,37 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   return (
     <div ref={containerRef} className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">{file}</span>
-        {rows.length > 0 && (
+        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">
+          {file}
+          {dirty && <span className="ml-1.5 text-warning" title="Modifications non enregistrées">●</span>}
+        </span>
+        {(rows.length > 0 || mode !== 'code') && (
+          <div className="flex shrink-0 items-center rounded-md border border-border bg-base p-0.5">
+            {[
+              { id: 'code', label: 'Code' },
+              ...(previewKind ? [{ id: 'preview', label: 'Aperçu', icon: IconEye }] : []),
+              { id: 'edit', label: 'Modifier', icon: IconPencil },
+            ].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => switchMode(t.id)}
+                className={`flex cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-colors ${
+                  mode === t.id ? 'bg-surface-hover text-text shadow-sm' : 'text-muted hover:text-text'
+                }`}
+              >
+                {t.icon && <t.icon className="h-3 w-3" />}
+                {t.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {mode === 'edit' && (
+          <Button variant="primary" disabled={!dirty || saving} onClick={save}>
+            <IconCheck className="h-3.5 w-3.5" />
+            {saving ? 'Enregistrement…' : 'Enregistrer'}
+          </Button>
+        )}
+        {mode === 'code' && rows.length > 0 && (
           <div className="flex shrink-0 items-center gap-1">
             <input
               ref={searchInputRef}
@@ -4505,7 +4620,19 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
         </button>
       </div>
 
-      {loading ? (
+      {mode === 'edit' ? (
+        draft == null ? (
+          <p className="p-3 text-xs text-muted">Chargement…</p>
+        ) : (
+          <CodeEditor value={draft} onChange={setDraft} onSave={save} highlight={highlight} />
+        )
+      ) : mode === 'preview' ? (
+        raw == null ? (
+          <p className="p-3 text-xs text-muted">Chargement…</p>
+        ) : (
+          <FilePreview kind={previewKind} source={raw} repoPath={repo.path} file={file} />
+        )
+      ) : loading ? (
         <p className="p-3 text-xs text-muted">Chargement…</p>
       ) : meta?.dataUrl && meta.mime === 'application/pdf' ? (
         <iframe title={file} src={meta.dataUrl} className="flex-1 bg-white" />
@@ -4787,7 +4914,7 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal }) {
   )
 }
 
-function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopRun, onClearRun, onBack, onRefreshList, onNotify }) {
+function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopRun, onClearRun, onBack, onRefreshList, onNotify, taskLaunch }) {
   const [status, setStatus] = useState(repo.status)
   const [branches, setBranches] = useState([])
   const [branchBase, setBranchBase] = useState(null)
@@ -4846,6 +4973,9 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
       ?.then((s) => s?.commit_language && setGenLanguage(s.commit_language))
   }, [])
   const [activeTab, setActiveTab] = useState('branches')
+  useEffect(() => {
+    if (taskLaunch && taskLaunch.path === repo.path) setActiveTab('ia')
+  }, [taskLaunch, repo.path])
   // Tabs stay mounted once visited so switching away and back doesn't wipe
   // their state, but tabs never opened (e.g. BDD, which connects to a real
   // remote DB on mount) aren't rendered eagerly.
@@ -5342,7 +5472,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
       )}
       {visitedTabs.has('ai') && (
         <div className={activeTab === 'ai' ? '' : 'hidden'}>
-          <AiSessionsPanel repo={repo} onNotify={onNotify} />
+          <AiSessionsPanel repo={repo} onNotify={onNotify} taskLaunch={taskLaunch} />
         </div>
       )}
 
@@ -6197,6 +6327,132 @@ function CreateRepoModal({ onClose, onNotify, onCreated }) {
   )
 }
 
+function formatTimerLeft(ms) {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  const pad = (v) => String(v).padStart(2, '0')
+  return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`
+}
+
+function HubiTimerModal({ onClose, onNotify, onStarted }) {
+  const [minutes, setMinutes] = useState('25')
+  const [label, setLabel] = useState('')
+  const [current, setCurrent] = useState(null)
+  const [now, setNow] = useState(() => Date.now())
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    api()
+      ?.hubi_timer_state?.()
+      ?.then((r) => setCurrent(r?.timer && r.timer.end > Date.now() ? r.timer : null))
+  }, [])
+
+  useEffect(() => {
+    if (!current) return
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [current])
+
+  const value = Number(minutes)
+  const valid = Number.isFinite(value) && value >= 1 && value <= 1440
+
+  async function start() {
+    if (!valid || busy) return
+    setBusy(true)
+    const r = await api()?.hubi_timer_start?.(value, label.trim())
+    setBusy(false)
+    if (r?.error) {
+      onNotify(r.error, true)
+      return
+    }
+    onNotify(r?.launched ? `Hubi lancé, minuteur de ${value} min démarré` : `Minuteur de ${value} min démarré`)
+    onStarted?.()
+    onClose()
+  }
+
+  async function cancel() {
+    setBusy(true)
+    await api()?.hubi_timer_cancel?.()
+    setBusy(false)
+    setCurrent(null)
+    onNotify('Minuteur annulé')
+  }
+
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-6" onClick={busy ? undefined : onClose}>
+      <div
+        className="w-full max-w-sm rounded-xl border border-border-strong bg-surface p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Minuteur Hubi</h2>
+          <button onClick={onClose} disabled={busy} className="text-muted hover:text-text cursor-pointer disabled:opacity-40">
+            <IconClose className="h-4 w-4" />
+          </button>
+        </div>
+
+        {current && (
+          <div className="mb-3 flex items-center justify-between gap-2 rounded-md border border-border bg-base px-3 py-2">
+            <span className="truncate text-xs text-muted">
+              {current.label} — <span className="font-mono text-text">{formatTimerLeft(current.end - now)}</span>
+            </span>
+            <Button variant="ghost" disabled={busy} onClick={cancel}>
+              Annuler
+            </Button>
+          </div>
+        )}
+
+        <div className="mb-3 flex gap-2">
+          {[5, 15, 25, 45].map((m) => (
+            <button
+              key={m}
+              onClick={() => setMinutes(String(m))}
+              className={`flex-1 rounded-md border px-2 py-1.5 text-xs cursor-pointer ${
+                Number(minutes) === m ? 'border-accent bg-accent-bg text-accent' : 'border-border text-muted hover:text-text'
+              }`}
+            >
+              {m} min
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 text-xs text-muted">
+            <input
+              type="number"
+              min="1"
+              max="1440"
+              value={minutes}
+              onChange={(e) => setMinutes(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && start()}
+              className="w-24 rounded-md border border-border bg-base px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+            />
+            minutes
+          </label>
+          <input
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && start()}
+            placeholder="Libellé (optionnel), ex. Pause café"
+            maxLength={60}
+            className="rounded-md border border-border bg-base px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+          />
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" disabled={busy} onClick={onClose}>
+            Fermer
+          </Button>
+          <Button variant="primary" disabled={busy || !valid} onClick={start}>
+            {busy ? 'Démarrage…' : current ? 'Remplacer' : 'Démarrer'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AiSettingsModal({ onClose, onNotify }) {
   const [provider, setProvider] = useState('openai')
   const [apiKey, setApiKey] = useState('')
@@ -6483,8 +6739,8 @@ function ThemePicker({ mode, onChange }) {
     function onDocClick(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false)
     }
-    document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
+    document.addEventListener('mousedown', onDocClick, true)
+    return () => document.removeEventListener('mousedown', onDocClick, true)
   }, [])
 
   // Fixed (not absolute) positioning, computed from the trigger's own
@@ -6510,7 +6766,7 @@ function ThemePicker({ mode, onChange }) {
       {open && coords && (
         <div
           style={{ position: 'fixed', top: coords.top, right: coords.right }}
-          className="z-40 w-96 overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl"
+          className="no-drag z-40 w-96 overflow-hidden rounded-lg border border-border-strong bg-surface shadow-2xl"
         >
           <p className="border-b border-border px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted">
             Thèmes
@@ -6532,6 +6788,92 @@ function ThemePicker({ mode, onChange }) {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+function ToolsMenu({ items, badge, label = 'Outils', icon, variant = 'subtle', footer }) {
+  const [open, setOpen] = useState(false)
+  const [coords, setCoords] = useState(null)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    function onDocClick(e) {
+      if (ref.current && !ref.current.contains(e.target)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick, true)
+    return () => document.removeEventListener('mousedown', onDocClick, true)
+  }, [])
+
+  // Fixed positioning for the same reason as ThemePicker: the header scrolls
+  // horizontally and would clip an absolutely positioned panel.
+  function toggleOpen() {
+    if (!open && ref.current) {
+      const rect = ref.current.getBoundingClientRect()
+      setCoords({ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) })
+    }
+    setOpen((v) => !v)
+  }
+
+  return (
+    <div ref={ref} className="relative">
+      <Button variant={variant} onClick={toggleOpen} title={label}>
+        {icon || <IconLayers className="h-3.5 w-3.5" />}
+        {label}
+        {badge > 0 && (
+          <span className="rounded-full bg-success-bg px-1.5 py-0 text-[10px] text-success">{badge}</span>
+        )}
+        <IconChevronDown className="h-3 w-3" />
+      </Button>
+      {open && coords && (
+        <div
+          style={{ position: 'fixed', top: coords.top, right: coords.right }}
+          className="no-drag z-40 w-max min-w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-border-strong bg-surface p-1 shadow-2xl"
+        >
+          {items.map((item) => (
+            <button
+              key={item.label}
+              onClick={() => {
+                setOpen(false)
+                item.onClick()
+              }}
+              className="flex w-full cursor-pointer items-center gap-2.5 whitespace-nowrap rounded-md px-2.5 py-2 text-left text-[13px] text-text transition-colors duration-150 hover:bg-surface-hover"
+            >
+              <span className="text-muted">{item.icon}</span>
+              <span className="flex-1">{item.label}</span>
+              {item.badge > 0 && (
+                <span className="rounded-full bg-success-bg px-1.5 py-0 text-[10px] text-success">{item.badge}</span>
+              )}
+            </button>
+          ))}
+          {footer && <div className="mt-1 border-t border-border px-2.5 pb-1 pt-2">{footer}</div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PageSkeleton() {
+  return (
+    <div className="flex animate-pulse flex-col gap-4">
+      <div className="flex gap-6 border-b border-border pb-3">
+        {[64, 56, 44].map((w, i) => (
+          <div key={i} className="h-4 rounded bg-surface-hover" style={{ width: w }} />
+        ))}
+      </div>
+      <div className="flex justify-between">
+        <div className="h-8 w-80 rounded-md bg-surface-hover" />
+        <div className="h-8 w-36 rounded-md bg-surface-hover" />
+      </div>
+      <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-1.5">
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} className="flex items-center gap-3 rounded-md px-3 py-2.5" style={{ animationDelay: `${i * 80}ms` }}>
+            <div className="h-7 w-7 rounded-md bg-surface-hover" />
+            <div className="h-3 rounded bg-surface-hover" style={{ width: `${30 - i * 3}%` }} />
+            <div className="ml-auto h-3 w-16 rounded bg-surface-hover" />
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -6591,6 +6933,44 @@ function ConfirmModal({ title, message, confirmLabel = 'Confirmer', onConfirm, o
   )
 }
 
+// Drag regions are handed to Windows' own move loop (start_window_drag) rather
+// than pywebview's JS drag, which replays every mousemove through the bridge:
+// it lags and drops the window as soon as the cursor outruns it. Listening on
+// #root (bubble) lets us stop the event before pywebview's body listener sees
+// it, while the pressed element itself still receives it normally.
+// Installed once for the whole page: TitleBar is rendered by several screens
+// at once (the Processus panel stays mounted while hidden), and one listener
+// per instance meant two drag requests per press — the second one reaching
+// Windows after the button was released, which drops it into keyboard-move
+// mode and leaves the window looking stuck.
+let nativeWindowDragInstalled = false
+function installNativeWindowDrag() {
+  if (nativeWindowDragInstalled) return
+  const root = document.getElementById('root')
+  if (!root) return
+  nativeWindowDragInstalled = true
+  let lastDown = 0
+  function onDown(e) {
+    if (e.button !== 0) return
+    if (!e.target.closest?.('.pywebview-drag-region')) return
+    const native = window.pywebview?.platform === 'edgechromium'
+    if (native) e.stopPropagation()
+    if (e.target.closest('button, a, input, select, textarea, [role="button"], .no-drag')) return
+    // The native move loop swallows the second press, so dblclick never
+    // fires on its own — double-click-to-maximize is detected here instead.
+    const now = Date.now()
+    if (now - lastDown < 350) {
+      lastDown = 0
+      // Every TitleBar picks up the new state through its resize listener.
+      api()?.toggle_maximize_window()
+      return
+    }
+    lastDown = now
+    if (native) api()?.start_window_drag()
+  }
+  root.addEventListener('mousedown', onDown)
+}
+
 function TitleBar() {
   const [maximized, setMaximized] = useState(false)
 
@@ -6599,8 +6979,29 @@ function TitleBar() {
     if (result) setMaximized(!!result.maximized)
   }
 
+  useEffect(() => {
+    installNativeWindowDrag()
+  }, [])
+  // Snap, Win+Arrow or double-click can (un)maximize without our button —
+  // re-read the real state from the OS whenever the window size changes.
+  useEffect(() => {
+    let timer
+    function onResize() {
+      clearTimeout(timer)
+      timer = setTimeout(async () => {
+        const state = await api()?.is_window_maximized?.()
+        if (typeof state === 'boolean') setMaximized(state)
+      }, 150)
+    }
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      clearTimeout(timer)
+    }
+  }, [])
+
   return (
-    <div className="pywebview-drag-region flex h-8 shrink-0 items-center justify-end bg-base" onDoubleClick={toggleMaximize}>
+    <div className="pywebview-drag-region flex h-8 shrink-0 items-center justify-end bg-base">
       <button
         onClick={() => api()?.minimize_window()}
         className="flex h-8 w-11 cursor-pointer items-center justify-center text-muted hover:bg-surface-hover hover:text-text"
@@ -6731,6 +7132,15 @@ export default function App() {
         e.preventDefault()
         setGlobalSearchOpen(false)
         setShortcutsOpen((v) => !v)
+      } else if (key === '=' || key === '+') {
+        e.preventDefault()
+        setZoom((z) => Math.min(150, z + 10))
+      } else if (key === '-') {
+        e.preventDefault()
+        setZoom((z) => Math.max(50, z - 10))
+      } else if (key === '0') {
+        e.preventDefault()
+        setZoom(100)
       }
     }
     window.addEventListener('keydown', onKeyDown)
@@ -6835,6 +7245,46 @@ export default function App() {
   const [runningPaths, setRunningPaths] = useState(() => new Set())
   const [runningMeta, setRunningMeta] = useState({})
   const [processesOpen, setProcessesOpen] = useState(false)
+  // Hubi runs as its own process (DevHub.exe --hubi); this only drives it.
+  const [hubi, setHubi] = useState({ running: false, autostart: false })
+  const refreshHubi = useCallback(() => {
+    api()
+      ?.hubi_get_state?.()
+      ?.then((s) => s && setHubi(s))
+  }, [])
+  useEffect(() => {
+    // pywebview injects the API asynchronously.
+    if (api()) refreshHubi()
+    else window.addEventListener('pywebviewready', refreshHubi, { once: true })
+    // Hubi can be quit from its own tray icon: re-read when we come back.
+    window.addEventListener('focus', refreshHubi)
+    return () => window.removeEventListener('focus', refreshHubi)
+  }, [refreshHubi])
+  async function toggleHubiRunning() {
+    const s = await api()?.hubi_set_running?.(!hubi.running)
+    if (s) setHubi(s)
+  }
+  async function toggleHubiAutostart() {
+    const s = await api()?.hubi_set_autostart?.(!hubi.autostart)
+    if (s?.error) notify(s.error, true)
+    if (s) setHubi({ running: !!s.running, autostart: !!s.autostart, shortcut: !!s.shortcut, claude_hooks: !!s.claude_hooks })
+  }
+  async function toggleHubiShortcut() {
+    const r = await api()?.hubi_set_shortcut?.(!hubi.shortcut)
+    if (r?.error) notify(r.error, true)
+    if (r) setHubi({ running: !!r.running, autostart: !!r.autostart, shortcut: !!r.shortcut, claude_hooks: !!r.claude_hooks })
+  }
+  async function toggleHubiClaudeHooks() {
+    const r = await api()?.hubi_set_claude_hooks?.(!hubi.claude_hooks)
+    if (r?.error) notify(r.error, true)
+    else if (r) notify(r.claude_hooks ? 'Hubi sera notifié par Claude Code (nouvelles sessions)' : 'Hooks Claude Code de Hubi retirés')
+    if (r) setHubi({ running: !!r.running, autostart: !!r.autostart, shortcut: !!r.shortcut, claude_hooks: !!r.claude_hooks })
+  }
+  const [hubiTimerOpen, setHubiTimerOpen] = useState(false)
+  const [hubiTasksOpen, setHubiTasksOpen] = useState(false)
+  // A Hubi task sent to Claude: RepoDetail opens its IA tab, AiSessionsPanel
+  // starts (or resumes) a session with the task as first message.
+  const [taskLaunch, setTaskLaunch] = useState(null)
   const [launchingGroup, setLaunchingGroup] = useState(false)
   const [groupSelection, setGroupSelection] = useState(() => new Set())
   // Stays mounted (hidden via CSS) once opened once, so closing/reopening the
@@ -7236,11 +7686,11 @@ export default function App() {
   })
 
   return (
-    <div className="min-h-screen bg-base text-text">
+    <div className="flex h-screen flex-col overflow-hidden bg-base text-text">
       {!appFullscreen && <TitleBar />}
       <SplashScreen ready={ready} />
       {!appFullscreen && (
-      <header className="flex items-center justify-between gap-4 overflow-x-auto border-b border-border px-6 py-4">
+      <header className="pywebview-drag-region flex shrink-0 items-center justify-between gap-4 overflow-x-auto border-b border-border px-6 py-4">
         <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-white">
             <IconLayers className="h-4 w-4" />
@@ -7248,7 +7698,6 @@ export default function App() {
           <h1 className="text-[15px] font-semibold tracking-tight">Dev Hub</h1>
         </div>
         <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-          <ZoomControl zoom={zoom} onChange={setZoom} />
           <Button variant="subtle" onClick={() => setGlobalSearchOpen(true)}>
             <IconSearch className="h-3.5 w-3.5" />
             Rechercher
@@ -7261,37 +7710,71 @@ export default function App() {
           >
             ?
           </button>
-          <Button variant="subtle" onClick={() => setAiSettingsOpen(true)}>
-            <IconSettings className="h-3.5 w-3.5" />
-            Paramètres IA
-          </Button>
-          <Button
-            variant="subtle"
-            onClick={() => {
-              setProcessesOpen(true)
-              setHasOpenedProcesses(true)
-            }}
-          >
-            <IconMonitor className="h-3.5 w-3.5" />
-            Processus
-            {runningPaths.size > 0 && (
-              <span className="ml-1 rounded-full bg-success-bg px-1.5 py-0 text-[10px] text-success">
-                {runningPaths.size}
-              </span>
-            )}
-          </Button>
-          <Button
-            variant="subtle"
-            onClick={() => openBrowserTab(null, 'Nouvel onglet')}
-            title="Ouvrir le navigateur Dev Hub"
-          >
-            <IconExternal className="h-3.5 w-3.5" />
-            Navigateur
-          </Button>
-          <Button variant="subtle" onClick={() => setLogsOpen((v) => !v)}>
-            <IconTerminal className="h-3.5 w-3.5" />
-            Journaux
-          </Button>
+          <ToolsMenu
+            badge={runningPaths.size}
+            footer={
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[12px] text-muted">Zoom</span>
+                <ZoomControl zoom={zoom} onChange={setZoom} />
+              </div>
+            }
+            items={[
+              {
+                label: 'Processus',
+                icon: <IconMonitor className="h-3.5 w-3.5" />,
+                badge: runningPaths.size,
+                onClick: () => {
+                  setProcessesOpen(true)
+                  setHasOpenedProcesses(true)
+                },
+              },
+              {
+                label: 'Navigateur',
+                icon: <IconExternal className="h-3.5 w-3.5" />,
+                onClick: () => openBrowserTab(null, 'Nouvel onglet'),
+              },
+              {
+                label: 'Journaux',
+                icon: <IconTerminal className="h-3.5 w-3.5" />,
+                onClick: () => setLogsOpen((v) => !v),
+              },
+              {
+                label: 'Paramètres IA',
+                icon: <IconSettings className="h-3.5 w-3.5" />,
+                onClick: () => setAiSettingsOpen(true),
+              },
+              {
+                label: hubi.running ? 'Arrêter Hubi' : 'Lancer Hubi',
+                icon: <IconEye className="h-3.5 w-3.5" />,
+                onClick: toggleHubiRunning,
+              },
+              {
+                label: `Raccourci Hubi sur le bureau : ${hubi.shortcut ? 'oui' : 'non'}`,
+                icon: <IconExternal className="h-3.5 w-3.5" />,
+                onClick: toggleHubiShortcut,
+              },
+              {
+                label: `Hubi au démarrage de Windows : ${hubi.autostart ? 'oui' : 'non'}`,
+                icon: <IconPlay className="h-3.5 w-3.5" />,
+                onClick: toggleHubiAutostart,
+              },
+              {
+                label: `Hubi notifié par Claude Code : ${hubi.claude_hooks ? 'oui' : 'non'}`,
+                icon: <IconSparkle className="h-3.5 w-3.5" />,
+                onClick: toggleHubiClaudeHooks,
+              },
+              {
+                label: 'Minuteur Hubi…',
+                icon: <IconRefresh className="h-3.5 w-3.5" />,
+                onClick: () => setHubiTimerOpen(true),
+              },
+              {
+                label: 'Tâches',
+                icon: <IconCheck className="h-3.5 w-3.5" />,
+                onClick: () => setHubiTasksOpen(true),
+              },
+            ]}
+          />
           {showList && (
             <>
               <Button
@@ -7308,15 +7791,28 @@ export default function App() {
               >
                 <IconRefresh className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
               </Button>
-              <Button variant="ghost" onClick={scanFolder} title="Scanner un dossier" className="px-2">
-                <IconScan className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="ghost" onClick={() => setCreateRepoOpen(true)} title="Créer un repo" className="px-2">
-                <IconGitCommit className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="primary" onClick={addRepo} title="Ajouter un projet" className="px-2">
-                <IconPlus className="h-3.5 w-3.5" />
-              </Button>
+              <ToolsMenu
+                label="Ajouter"
+                variant="primary"
+                icon={<IconPlus className="h-3.5 w-3.5" />}
+                items={[
+                  {
+                    label: 'Ajouter un projet existant',
+                    icon: <IconFolder className="h-3.5 w-3.5" />,
+                    onClick: addRepo,
+                  },
+                  {
+                    label: 'Scanner un dossier',
+                    icon: <IconScan className="h-3.5 w-3.5" />,
+                    onClick: scanFolder,
+                  },
+                  {
+                    label: 'Créer un repo (GitHub / GitLab)',
+                    icon: <IconGitCommit className="h-3.5 w-3.5" />,
+                    onClick: () => setCreateRepoOpen(true),
+                  },
+                ]}
+              />
             </>
           )}
           <ThemePicker mode={themeMode} onChange={setThemeMode} />
@@ -7327,6 +7823,25 @@ export default function App() {
 
       {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
       {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
+      {hubiTimerOpen && (
+        <HubiTimerModal
+          onClose={() => setHubiTimerOpen(false)}
+          onNotify={notify}
+          onStarted={() => setTimeout(refreshHubi, 1500)}
+        />
+      )}
+      {hubiTasksOpen && (
+        <HubiTasksModal
+          repos={repos}
+          onClose={() => setHubiTasksOpen(false)}
+          onNotify={notify}
+          onLaunch={(task, sessionId) => {
+            setHubiTasksOpen(false)
+            setSelectedPath(task.project)
+            setTaskLaunch({ path: task.project, sessionId, prompt: task.text, nonce: Date.now() })
+          }}
+        />
+      )}
       {createRepoOpen && (
         <CreateRepoModal onClose={() => setCreateRepoOpen(false)} onNotify={notify} onCreated={refresh} />
       )}
@@ -7441,7 +7956,10 @@ export default function App() {
         </div>
       )}
 
-      <main className="p-6">
+      <main className="flex-1 overflow-y-auto p-6">
+        {refreshing && <PageSkeleton />}
+        {/* Hidden, not unmounted, while refreshing: keeps tab/filter state. */}
+        <div className={refreshing ? 'hidden' : 'contents'}>
         {showList && (
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-1 border-b border-border">
@@ -7709,8 +8227,10 @@ export default function App() {
             onBack={() => setSelectedPath(null)}
             onRefreshList={refreshRepoAndGroupList}
             onNotify={notify}
+            taskLaunch={taskLaunch}
           />
         )}
+        </div>
       </main>
     </div>
   )

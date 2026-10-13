@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hubi — nouvelle tâche</title>
+    <style>
+      :root {
+        --bg: #0b0b0d;
+        --surface: #16161a;
+        --text: #f4f4f5;
+        --muted: #77777f;
+        --accent: #00e5ff;
+        --danger: #ff5252;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'Segoe UI', system-ui, sans-serif;
+      }
+      .card {
+        box-sizing: border-box;
+        height: 76px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 14px;
+      }
+      .dot {
+        flex: none;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 10px var(--accent);
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: inherit;
+        font: inherit;
+        font-size: 16px;
+      }
+      input::placeholder {
+        color: var(--muted);
+      }
+      .hint {
+        flex: none;
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .error .dot {
+        background: var(--danger);
+        box-shadow: 0 0 10px var(--danger);
+      }
+      .suggest {
+        display: none;
+        padding: 0 10px 10px;
+      }
+      .suggest.open {
+        display: block;
+      }
+      .suggest div {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        height: 30px;
+        padding: 0 10px;
+        border-radius: 6px;
+        font-size: 13px;
+        color: var(--muted);
+        cursor: pointer;
+      }
+      .suggest div::before {
+        content: '@';
+        color: var(--accent);
+      }
+      .suggest div.active,
+      .suggest div:hover {
+        background: var(--surface);
+        color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="card" id="card">
+      <span class="dot"></span>
+      <input id="text" placeholder="Nouvelle tâche pour Hubi… (@projet pour la rattacher)" maxlength="300" autocomplete="off" spellcheck="false" />
+      <span class="hint">Entrée ↵ · Échap</span>
+    </div>
+    <div class="suggest" id="suggest"></div>
+    <script>
+      ;(function () {
+        'use strict'
+        const CARD_H = 76
+        const ROW_H = 30
+        const MAX_ROWS = 6
+        const input = document.getElementById('text')
+        const card = document.getElementById('card')
+        const suggest = document.getElementById('suggest')
+        let busy = false
+        let focusedOnce = false
+        let projects = []
+        let matches = []
+        let active = 0
+
+        function api() {
+          return window.pywebview && window.pywebview.api ? window.pywebview.api : null
+        }
+
+        // Couleurs du thème Dev Hub (instantané enregistré par Dev Hub).
+        async function init() {
+          const a = api()
+          if (!a) return
+          const t = (a.get_theme && (await a.get_theme())) || {}
+          const root = document.documentElement.style
+          if (t.base) root.setProperty('--bg', t.base)
+          if (t.surface) root.setProperty('--surface', t.surface)
+          if (t.text) root.setProperty('--text', t.text)
+          if (t.muted) root.setProperty('--muted', t.muted)
+          if (t.accent) root.setProperty('--accent', t.accent)
+          if (t.danger) root.setProperty('--danger', t.danger)
+          projects = (a.list_projects && (await a.list_projects())) || []
+        }
+        if (api()) init()
+        else window.addEventListener('pywebviewready', init, { once: true })
+
+        function close() {
+          const a = api()
+          if (a) a.close()
+        }
+
+        // « @proj » en début de saisie, curseur encore dans ce mot.
+        function projectQuery() {
+          const v = input.value
+          if (!v.startsWith('@')) return null
+          const space = v.indexOf(' ')
+          if (space !== -1 && input.selectionStart > space) return null
+          return v.slice(1, space === -1 ? undefined : space).toLowerCase()
+        }
+
+        function setOpen(rows) {
+          suggest.classList.toggle('open', rows > 0)
+          const a = api()
+          if (a && a.resize) a.resize(CARD_H + (rows > 0 ? rows * ROW_H + 10 : 0))
+        }
+
+        function render() {
+          const q = projectQuery()
+          matches = q === null ? [] : projects.filter((p) => p.toLowerCase().includes(q)).slice(0, MAX_ROWS)
+          if (active >= matches.length) active = 0
+          suggest.innerHTML = ''
+          matches.forEach(function (name, i) {
+            const row = document.createElement('div')
+            row.textContent = name
+            if (i === active) row.className = 'active'
+            row.addEventListener('mousedown', function (e) {
+              e.preventDefault()
+              pick(name)
+            })
+            suggest.appendChild(row)
+          })
+          setOpen(matches.length)
+        }
+
+        function pick(name) {
+          const v = input.value
+          const space = v.indexOf(' ')
+          const rest = space === -1 ? '' : v.slice(space + 1)
+          input.value = '@' + name + ' ' + rest
+          const caret = name.length + 2
+          input.setSelectionRange(caret, caret)
+          matches = []
+          render()
+          input.focus()
+        }
+
+        input.addEventListener('input', function () {
+          active = 0
+          render()
+        })
+
+        input.addEventListener('keydown', async function (e) {
+          if (matches.length) {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              e.preventDefault()
+              active = (active + (e.key === 'ArrowDown' ? 1 : matches.length - 1)) % matches.length
+              render()
+              return
+            }
+            if (e.key === 'Tab' || e.key === 'Enter') {
+              e.preventDefault()
+              pick(matches[active])
+              return
+            }
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            close()
+          } else if (e.key === 'Enter') {
+            e.preventDefault()
+            const text = input.value.trim()
+            const a = api()
+            if (!text || !a || busy) return
+            busy = true
+            const res = await a.add(text)
+            busy = false
+            if (res && res.error) card.classList.add('error')
+          }
+        })
+
+        window.addEventListener('focus', function () {
+          focusedOnce = true
+          input.focus()
+        })
+        // Clic ailleurs : on referme, comme un lanceur.
+        window.addEventListener('blur', function () {
+          if (focusedOnce) close()
+        })
+        input.focus()
+      })()
+    </script>
+  </body>
+</html>

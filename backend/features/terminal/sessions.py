@@ -139,7 +139,7 @@ class TerminalMixin:
         sessions.sort(key=lambda s: s["modified"], reverse=True)
         return sessions
 
-    def start_terminal(self, path, session_id=None):
+    def start_terminal(self, path, session_id=None, prompt=None):
         ai = load_config().get("ai", {})
         cli_command = (ai.get("cli_command") or "").strip()
         if not cli_command:
@@ -156,6 +156,11 @@ class TerminalMixin:
         argv = [binary]
         if session_id:
             argv += ["--resume", session_id]
+        # A Hubi task launched "with Claude": sent as the session's first
+        # message (claude [--resume id] "<prompt>" starts interactively with it).
+        prompt = " ".join(str(prompt or "").split())
+        if prompt:
+            argv.append(prompt)
 
         # DevHub.exe is a frozen GUI app with no console, so it inherits no
         # TERM/color env vars at all — CLIs that auto-detect color support

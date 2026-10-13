@@ -38,9 +38,10 @@ def start_fullscreen_watch():
 
 
 def kill_all_running():
-    from features.processes.run_configs import all_running
+    from features.processes.run_configs import all_running, silence_exit_notifications
     from features.terminal import sessions as terminal_sessions
 
+    silence_exit_notifications()
     terminal_sessions.kill_all_running()
     all_running().clear()
 
@@ -52,9 +53,18 @@ class WindowChromeMixin:
         webview.windows[0].minimize()
         return {"ok": True}
 
+    def is_window_maximized(self):
+        state = platform_svc.is_window_maximized(webview.windows[0])
+        return _window_maximized if state is None else state
+
     def toggle_maximize_window(self):
         global _window_maximized
         w = webview.windows[0]
+        # Snap / Win+Arrow / double-click can maximize behind our back now —
+        # ask the OS rather than trusting our own flag when it can tell us.
+        state = platform_svc.is_window_maximized(w)
+        if state is not None:
+            _window_maximized = state
         if _window_maximized:
             w.restore()
             _window_maximized = False
@@ -66,6 +76,9 @@ class WindowChromeMixin:
     def close_window(self):
         webview.windows[0].destroy()
         return {"ok": True}
+
+    def start_window_drag(self):
+        return {"native": platform_svc.start_native_drag(webview.windows[0])}
 
     def open_external(self, url):
         if not url:

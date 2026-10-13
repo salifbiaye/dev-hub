@@ -14,9 +14,8 @@ from features.hubi import window as hubi_window
 def main():
     public_dir = Path(__file__).parent.parent / "frontend" / "public"
     port = serve_own_ui(public_dir)
-    hubi_window.configure(f"http://localhost:{port}")
     hubi_window.set_enabled_flag(True)
-    hubi_api.start()
+    hubi_api.start(f"http://localhost:{port}")
     webview.start()
     hubi_api.stop()
     sys.exit(0)

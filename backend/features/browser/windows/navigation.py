@@ -34,6 +34,10 @@ class _NavigationMixin:
         t = self._tabs.get(tab_id)
         if t is not None and history.is_start_page(t.get("url")):
             self.navigate(tab_id, history.start_page_url(browser_window.get_own_ui_base()))
+        elif t is not None and t.get("errored"):
+            # The tab shows our error page (a NavigateToString document):
+            # Reload() would just redraw it — retry the real URL instead.
+            self.navigate(tab_id, t["url"])
         else:
             self._with_control(tab_id, lambda c: c.Reload())
         return {"ok": True}

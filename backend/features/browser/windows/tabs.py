@@ -10,6 +10,38 @@ from .. import history
 from . import window as browser_window
 
 
+def _error_page(url, status, theme=None):
+    import html
+
+    c = {"base": "#0a0a0c", "text": "#e6e6ea", "muted": "#9a9aa5", "accent": "#6e56cf"}
+    c.update({k: v for k, v in (theme or {}).items() if k in c and v})
+
+    reasons = {
+        "ConnectionAborted": "La connexion a été interrompue.",
+        "ConnectionReset": "La connexion a été réinitialisée.",
+        "CannotConnect": "Impossible de se connecter — le serveur n'est peut-être pas (encore) démarré.",
+        "HostNameNotResolved": "Adresse introuvable.",
+        "Timeout": "Le serveur a mis trop de temps à répondre.",
+        "Disconnected": "Pas de connexion réseau.",
+        "ServerUnreachable": "Serveur injoignable.",
+    }
+    reason = reasons.get(status, f"Échec du chargement ({status}).")
+    safe_url = html.escape(url or "")
+    js_url = json.dumps(url or "")
+    return f"""<!doctype html><html lang="fr"><head><meta charset="utf-8"><style>
+body{{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+background:{c["base"]};color:{c["text"]};font-family:Segoe UI,system-ui,sans-serif}}
+.box{{max-width:520px;padding:24px;text-align:center}}
+h1{{font-size:18px;margin:0 0 8px}} p{{color:{c["muted"]};font-size:13px;margin:0 0 6px}}
+code{{color:{c["text"]};opacity:.8;word-break:break-all}}
+button{{margin-top:16px;padding:8px 18px;border-radius:8px;border:0;background:{c["accent"]};color:#fff;
+font-size:13px;cursor:pointer}}
+</style></head><body><div class="box">
+<h1>Cette page ne s'est pas chargée</h1><p>{html.escape(reason)}</p><p><code>{safe_url}</code></p>
+<button onclick="location.href={html.escape(js_url, quote=True)}">Réessayer</button>
+</div></body></html>"""
+
+
 class _TabsMixin:
     """js_api for the standalone Navigateur window — see the module-level
     comment in window.py above _browser_window for why tab content lives as
@@ -60,6 +92,7 @@ class _TabsMixin:
                 "device_ua": t.get("device_ua"),
                 "canGoBack": can_go.get(tid, (False, False))[0],
                 "canGoForward": can_go.get(tid, (False, False))[1],
+                "loading": bool(t.get("loading")),
             }
             for tid, t in self._tabs.items()
         ]
@@ -75,7 +108,8 @@ class _TabsMixin:
         # Mirrors whatever the main window's CSS currently resolves to,
         # rather than duplicating Dev Hub's ~30 theme palettes here —
         # automatically stays correct as themes are added/changed.
-        return history.read_theme_vars()
+        self._theme_vars = history.read_theme_vars()
+        return self._theme_vars
 
     def search_history(self, query):
         # Backs the address bar's suggestion dropdown — reuses the same
@@ -127,6 +161,10 @@ class _TabsMixin:
         # directly into an already-loaded page without one.
         from System import Func, Type
 
+        try:
+            self._theme_vars = json.loads(vars_json)
+        except Exception:
+            pass
         form = self._get_form()
         if form is None:
             return
@@ -241,13 +279,42 @@ class _TabsMixin:
             rect = self._content_rect or {"x": 0, "y": 74, "width": 900, "height": 626}
             control.Bounds = self._scaled_rect(rect)
 
+            def _on_nav_starting(sender, args):
+                # A dev server compiling a route on first hit (Next.js etc.)
+                # can take many seconds — without this the tab just looked
+                # empty and dead the whole time.
+                t = self._tabs.get(tab_id)
+                if t is not None and not t.get("showing_error"):
+                    t["loading"] = True
+                    self._push_tabs_async()
+
             def _on_nav_completed(sender, args):
                 t = self._tabs.get(tab_id)
-                if t is not None:
+                if t is None:
+                    return
+                t["loading"] = False
+                if t.pop("showing_error", False):
+                    # Our own error page finished loading; keep the URL the
+                    # user actually asked for in the address bar.
+                    self._push_tabs_async()
+                    return
+                try:
+                    t["url"] = str(control.Source)
+                except Exception:
+                    pass
+                try:
+                    failed = not args.IsSuccess and str(args.WebErrorStatus) != "OperationCanceled"
+                except Exception:
+                    failed = False
+                t["errored"] = failed
+                if failed:
+                    # The built-in error page is disabled (Edge branding), so
+                    # a failed load used to leave a blank tab; show ours.
+                    t["showing_error"] = True
                     try:
-                        t["url"] = str(control.Source)
+                        control.NavigateToString(_error_page(t["url"], str(args.WebErrorStatus), getattr(self, "_theme_vars", None)))
                     except Exception:
-                        pass
+                        t.pop("showing_error", None)
                 self._push_tabs_async()
 
             def _on_core_ready(sender, args):
@@ -318,6 +385,7 @@ class _TabsMixin:
                 except Exception:
                     pass
 
+            control.NavigationStarting += _on_nav_starting
             control.NavigationCompleted += _on_nav_completed
             control.CoreWebView2InitializationCompleted += _on_core_ready
 
@@ -392,7 +460,18 @@ class _TabsMixin:
         self._win.minimize()
         return {"ok": True}
 
+    def is_window_maximized(self):
+        from core.platform import platform_svc
+
+        state = platform_svc.is_window_maximized(self._win)
+        return self._maximized if state is None else state
+
     def toggle_maximize_window(self):
+        from core.platform import platform_svc
+
+        state = platform_svc.is_window_maximized(self._win)
+        if state is not None:
+            self._maximized = state
         if self._maximized:
             self._win.restore()
             self._maximized = False
@@ -404,3 +483,8 @@ class _TabsMixin:
     def close_window(self):
         self._win.destroy()
         return {"ok": True}
+
+    def start_window_drag(self):
+        from core.platform import platform_svc
+
+        return {"native": platform_svc.start_native_drag(self._win)}

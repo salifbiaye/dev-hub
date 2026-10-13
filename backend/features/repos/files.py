@@ -110,6 +110,30 @@ class ReposFilesMixin:
             return {"binary": True, "size": size}
         return {"content": data.decode("utf-8", errors="replace"), "size": size}
 
+    def write_file_content(self, path, file, content):
+        """Save a text file edited in the Code tab. Only existing text files
+        of a repo Dev Hub knows about; keeps the file's CRLF line endings."""
+        known = {str(Path(r["path"]).resolve()) for r in load_config()["repos"]}
+        if str(Path(path).resolve()) not in known or not safe_repo_file(path, file):
+            return {"error": "Chemin de fichier invalide"}
+        file_path = Path(path) / file
+        if not file_path.is_file():
+            return {"error": "Fichier introuvable"}
+        try:
+            original = file_path.read_bytes()
+        except OSError as e:
+            return {"error": str(e)}
+        if b"\x00" in original[:8000]:
+            return {"error": "Fichier binaire — modification impossible ici"}
+        text = (content or "").replace("\r\n", "\n")
+        if b"\r\n" in original:
+            text = text.replace("\n", "\r\n")
+        try:
+            file_path.write_bytes(text.encode("utf-8"))
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True, "size": file_path.stat().st_size}
+
     def list_env_files(self, path):
         p = Path(path)
         if not p.exists():

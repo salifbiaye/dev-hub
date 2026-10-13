@@ -3,12 +3,15 @@ import os
 import shutil
 import sys
 import threading
+import time
 import uuid
+from pathlib import Path
 
 import webview
 
 from app_config import load_config, save_config
 from core.platform import platform_svc
+from features.hubi import client as hubi_client
 from features.terminal import sessions as terminal_sessions
 
 # Running-config tracker: one entry per (repo path, config name) currently
@@ -26,8 +29,16 @@ def _run_key(path, name):
     return f"{path}\x00{name}"
 
 
+_quiet = {"value": False}
+
+
 def all_running():
     return _running
+
+
+def silence_exit_notifications():
+    """Dev Hub is closing and kills every run: don't report those to Hubi."""
+    _quiet["value"] = True
 
 
 def _stream_run_terminal(path, name, terminal_id, proc):
@@ -48,17 +59,50 @@ def _stream_run_terminal(path, name, terminal_id, proc):
                     pass
     except Exception:
         pass
-    terminal_sessions.pop(terminal_id)
+    # Already gone from the registry = its terminal was closed by the user.
+    closed_by_user = terminal_sessions.pop(terminal_id) is None
     # Keep _terminal_buffers around after exit so the user can still read the
     # error/output that just happened — only an explicit "Clear" wipes it.
-    _running.pop(_run_key(path, name), None)
+    entry = _running.pop(_run_key(path, name), None) or {}
+    code = _exit_code(proc)
+    user_stopped = closed_by_user or entry.get("stopped") or code in _INTERRUPTED_CODES
+    _notify_hubi(path, name, code, user_stopped, entry.get("started"))
+    shown_code = 0 if user_stopped or code is None else code
     try:
         window.evaluate_js(f"window.__devhub_onTerminalExit && window.__devhub_onTerminalExit({json.dumps(terminal_id)})")
         window.evaluate_js(
-            f"window.__devhub_onRunExit && window.__devhub_onRunExit({json.dumps(path)}, {json.dumps(name)}, 0)"
+            f"window.__devhub_onRunExit && window.__devhub_onRunExit({json.dumps(path)}, {json.dumps(name)}, {int(shown_code)})"
         )
     except Exception:
         pass
+
+
+# Ctrl+C in the run's terminal (STATUS_CONTROL_C_EXIT, signed and unsigned):
+# the user stopped it on purpose, same as the Stop button.
+_INTERRUPTED_CODES = {0xC000013A, -1073741510, 130}
+QUICK_RUN_SECONDS = 600  # only runs shorter than this report a success to Hubi
+
+
+def _exit_code(proc):
+    # read() hits EOF slightly before winpty reports the process as gone.
+    deadline = time.monotonic() + 1.5
+    try:
+        while proc.isalive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        code = getattr(proc, "exitstatus", None)
+        return int(code) if code is not None else None
+    except Exception:
+        return None
+
+
+def _notify_hubi(path, name, code, user_stopped, started):
+    if user_stopped or code is None or _quiet["value"]:
+        return
+    project = Path(path).name
+    if code != 0:
+        hubi_client.event("run_error", project, f"{name} s'est arrêté (code {code})")
+    elif started and time.time() - started < QUICK_RUN_SECONDS:
+        hubi_client.event("run_done", project, f"{name} terminé")
 
 
 class ProcessesRunMixin:
@@ -171,7 +215,7 @@ class ProcessesRunMixin:
 
         terminal_id = str(uuid.uuid4())
         terminal_sessions.register(terminal_id, proc)
-        _running[key] = {"terminal_id": terminal_id, "config": name, "path": path}
+        _running[key] = {"terminal_id": terminal_id, "config": name, "path": path, "started": time.time()}
         threading.Thread(target=_stream_run_terminal, args=(path, name, terminal_id, proc), daemon=True).start()
         return {"ok": True, "terminal_id": terminal_id}
 
@@ -179,6 +223,7 @@ class ProcessesRunMixin:
         entry = _running.get(_run_key(path, name))
         if not entry:
             return {"error": "Rien en cours"}
+        entry["stopped"] = True
         proc = terminal_sessions.get(entry.get("terminal_id"))
         if proc:
             # cmd.exe spawns the real dev server (npm -> node, etc.) as a
