@@ -41,7 +41,10 @@
     shake: 0, // amplitude de tremblement (px)
     pulse: 0, // amplitude de pulsation (échelle)
     bounce: 0, // amplitude de rebond (px)
-    owl: 1, // 0..1 : corps de hibou autour des yeux (0 = yeux seuls)
+    owl: 1, // (hibou) 0..1 : corps de hibou autour des yeux
+    dim: 0, // 0..1 : le corps passe du blanc au graphite (mascotte « auto » : il dort)
+    tablet: 0, // 0..1 : mains + tablette qui montre l'état de la session
+    lines: 0, // 0..1 : petits traits d'agitation autour du corps (alerte, sursaut)
     tuft: 0, // px : houppes des oreilles (positif = dressées, négatif = baissées)
     puff: 1, // gonflement des plumes de la tête
     sink: 0, // px : le hibou s'affaisse (somnolent, endormi)
@@ -54,19 +57,19 @@
 
   const PRESETS = {
     normal: {},
-    sleepy: { lid: 0.5, cy: 102, hi: 0.35, look: 0.3, sink: 4, tuft: -4 },
-    asleep: { lid: 0.93, cy: 92, hi: 0.2, look: 0, zzz: 1, glow: 14, sink: 10, tuft: -9, puff: 0.97 },
-    startle: { w: 112, h: 156, sep: 148, r: 40, cy: 100, glow: 28, tuft: 12, puff: 1.04, spread: 10 },
+    sleepy: { lid: 0.5, cy: 102, hi: 0.35, look: 0.3, sink: 4, tuft: -4, dim: 0.35 },
+    asleep: { lid: 0.93, cy: 92, hi: 0.2, look: 0, zzz: 1, glow: 14, sink: 10, tuft: -9, puff: 0.97, dim: 1 },
+    startle: { w: 112, h: 156, sep: 148, r: 40, cy: 100, glow: 28, tuft: 12, puff: 1.04, spread: 10, lines: 1 },
     excited: { w: 106, h: 134, sep: 150, cy: 102, r: 38, bounce: 5, tuft: 6, flap: 0.5 },
     laugh: { arc: 1, cy: 68, mouth: 1, bounce: 6, look: 0, flap: 1, tuft: 3 },
     focused: { h: 112, cy: 108, lid: 0.27, slant: 38, look: 0.5, tuft: -5 },
-    acting: { w: 112, h: 119, sep: 156, cy: 104, r: 38, iris: 1, lid: 0.08, slant: 14, hi: 0, look: 0.4, flap: 0.45 },
+    acting: { w: 112, h: 119, sep: 156, cy: 104, r: 38, iris: 1, lid: 0.08, slant: 14, hi: 0, look: 0.4, flap: 0.45, tablet: 1 },
     fear: { w: 46, h: 60, sep: 132, cy: 99, r: 14, shake: 3, glow: 14, look: 0.4, puff: 1.06, tuft: -8 },
     error: { cross: 1, cy: 100, r_: RED[0], g_: RED[1], b_: RED[2], look: 0 },
-    listening: { h: 100, cy: 76, notepad: 1, look: 0.4, tuft: 3 },
-    understood: { h: 104, cy: 74, wink: 1, thumb: 1, look: 0, tuft: 4 },
-    alert: { w: 110, h: 140, sep: 152, cy: 101, r: 38, pulse: 0.05, shake: 1.4, r_: AMBER[0], g_: AMBER[1], b_: AMBER[2], glow: 28, tuft: 14, puff: 1.04, spread: 6 },
-    happy: { arc: 1, cy: 84, r_: GREEN[0], g_: GREEN[1], b_: GREEN[2], look: 0, flap: 0.8, tuft: 4 },
+    listening: { h: 100, cy: 76, notepad: 1, look: 0.4, tuft: 3, tablet: 1 },
+    understood: { h: 104, cy: 74, wink: 1, thumb: 1, look: 0, tuft: 4, tablet: 1 },
+    alert: { w: 110, h: 140, sep: 152, cy: 101, r: 38, pulse: 0.05, shake: 1.4, r_: AMBER[0], g_: AMBER[1], b_: AMBER[2], glow: 28, tuft: 14, puff: 1.04, spread: 6, tablet: 1, lines: 1 },
+    happy: { arc: 1, cy: 84, r_: GREEN[0], g_: GREEN[1], b_: GREEN[2], look: 0, flap: 0.8, tuft: 4, tablet: 1 },
   }
 
   const MOOD_NAMES = Object.keys(PRESETS)
@@ -157,7 +160,7 @@
     // un sens (alerte ambre, erreur rouge, content vert) gardent la leur.
     let baseColor = CYAN
     let alertRing = false
-    let mascotOwl = true
+    let kind = 'light' // light | graphite | auto (corps doux) | owl | eyes
     let moodName = 'normal'
 
     function setMood(name) {
@@ -165,11 +168,10 @@
       const tint = { r_: baseColor[0], g_: baseColor[1], b_: baseColor[2] }
       target = Object.assign({}, BASE, tint, PRESETS[moodName])
       if (moodName === 'alert' && alertRing) target.ring = 1
-      target.owl = mascotOwl ? 1 : 0
     }
 
     function setMascot(name) {
-      mascotOwl = name !== 'eyes'
+      kind = ['light', 'graphite', 'auto', 'owl', 'eyes'].includes(name) ? name : 'light'
       setMood(moodName)
     }
 
@@ -802,6 +804,234 @@
       drawZzz()
     }
 
+
+    // ---------------------------------------------------------------- Hubi (corps doux)
+    // Un corps arrondi neutre, deux ovales pour yeux, et — seulement quand
+    // elles servent — des mains qui tiennent une tablette montrant l'état de
+    // la session. La couleur du thème n'apparaît que sur la tablette.
+
+    const SKIN_LIGHT = { b0: [255, 255, 255], b1: [212, 212, 224], ink: [28, 26, 38], hi: 0.9 }
+    const SKIN_GRAPHITE = { b0: [82, 82, 96], b1: [40, 40, 48], ink: [241, 241, 247], hi: 0.14 }
+
+    function mixRgb(a, b, k) {
+      return a.map((v, i) => v + (b[i] - v) * k)
+    }
+
+    function blobPalette() {
+      // « auto » : blanc éveillé, gris quand il somnole ou dort (params.dim).
+      const d = kind === 'graphite' ? 1 : kind === 'auto' ? clamp(params.dim, 0, 1) : 0
+      return {
+        b0: mixRgb(SKIN_LIGHT.b0, SKIN_GRAPHITE.b0, d),
+        b1: mixRgb(SKIN_LIGHT.b1, SKIN_GRAPHITE.b1, d),
+        // Les yeux basculent d'un coup (sombre -> clair) au milieu de la
+        // transition : un mélange linéaire passerait par un gris identique
+        // à celui du corps et les yeux disparaîtraient.
+        ink: mixRgb(SKIN_LIGHT.ink, SKIN_GRAPHITE.ink, clamp((d - 0.45) / 0.1, 0, 1)),
+        hi: SKIN_LIGHT.hi + (SKIN_GRAPHITE.hi - SKIN_LIGHT.hi) * d,
+      }
+    }
+
+    function rgbaOf(c, a) {
+      return 'rgba(' + Math.round(c[0]) + ',' + Math.round(c[1]) + ',' + Math.round(c[2]) + ',' + (a === undefined ? 1 : a) + ')'
+    }
+
+    function drawBlobEye(side, ex, ey, ew, eh, pal) {
+      const p = params
+      const arcA = clamp(Math.max(p.arc, side > 0 ? p.wink : 0), 0, 1)
+      const closed = clamp((p.lid - 0.4) / 0.1, 0, 1)
+      const bodyA = 1 - Math.max(arcA, p.cross, closed)
+      const ink = rgbaOf(pal.ink)
+
+      if (bodyA > 0.01) {
+        ctx.save()
+        ctx.globalAlpha = bodyA
+        ctx.fillStyle = ink
+        // Concentré : les ovales s'inclinent, coin intérieur plus bas.
+        const tilt = clamp(p.slant / 38, 0, 1) * 0.45
+        if (tilt > 0.01) {
+          ctx.translate(ex, ey)
+          ctx.rotate(-side * tilt)
+          ctx.translate(-ex, -ey)
+        }
+        ctx.beginPath()
+        ctx.ellipse(ex, ey, ew / 2, eh / 2, 0, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.restore()
+      }
+
+      ctx.save()
+      ctx.strokeStyle = ink
+      ctx.lineCap = 'round'
+      ctx.lineWidth = 6
+      if (arcA > 0.01) {
+        ctx.globalAlpha = arcA
+        ctx.beginPath()
+        ctx.moveTo(ex - 12, ey + 6)
+        ctx.quadraticCurveTo(ex, ey - 12, ex + 12, ey + 6)
+        ctx.stroke()
+      }
+      if (closed > 0.01) {
+        ctx.globalAlpha = closed * (1 - arcA)
+        ctx.beginPath()
+        ctx.moveTo(ex - 11, ey)
+        ctx.quadraticCurveTo(ex, ey + 9, ex + 11, ey)
+        ctx.stroke()
+      }
+      if (p.cross > 0.01) {
+        ctx.globalAlpha = p.cross
+        ctx.strokeStyle = '#ff5252'
+        ctx.beginPath()
+        ctx.moveTo(ex - 9, ey - 9)
+        ctx.lineTo(ex + 9, ey + 9)
+        ctx.moveTo(ex + 9, ey - 9)
+        ctx.lineTo(ex - 9, ey + 9)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
+    function drawBlobTablet(cx, cy, pal, accent) {
+      const a = params.tablet
+      if (a < 0.02) return
+      ctx.save()
+      ctx.globalAlpha = a
+      ctx.translate(cx, cy)
+      ctx.rotate(-0.07)
+      // Tablette.
+      ctx.fillStyle = '#1a1b26'
+      roundRectPath(ctx, -46, -24, 92, 52, 9)
+      ctx.fill()
+      ctx.strokeStyle = rgbaOf(accent, 0.85)
+      ctx.lineWidth = 2.4
+      ctx.stroke()
+      // Écran : l'état de la session.
+      ctx.save()
+      ctx.translate(0, 2)
+      ctx.lineCap = 'round'
+      ctx.lineJoin = 'round'
+      if (moodName === 'listening') {
+        ctx.strokeStyle = rgbaOf(accent)
+        ctx.lineWidth = 2.6
+        for (let i = 0; i < 3; i++) {
+          ctx.beginPath()
+          ctx.moveTo(-26, -10 + i * 11)
+          ctx.lineTo(14 - i * 8, -10 + i * 11)
+          ctx.stroke()
+        }
+      } else if (moodName === 'acting') {
+        ctx.strokeStyle = rgbaOf(accent)
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.arc(0, 0, 13, t * 4, t * 4 + 4.3)
+        ctx.stroke()
+        ctx.fillStyle = rgbaOf(accent)
+        ctx.beginPath()
+        ctx.arc(0, 0, 3, 0, Math.PI * 2)
+        ctx.fill()
+      } else if (moodName === 'alert') {
+        ctx.fillStyle = '#ffc107'
+        ctx.font = 'bold 30px sans-serif'
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText('!', 0, 0)
+      } else {
+        // content / compris : une coche.
+        ctx.strokeStyle = '#69f0ae'
+        ctx.lineWidth = 4.5
+        ctx.beginPath()
+        ctx.moveTo(-13, 2)
+        ctx.lineTo(-3, 12)
+        ctx.lineTo(15, -10)
+        ctx.stroke()
+      }
+      ctx.restore()
+      // Mains : deux ellipses du même dégradé que le corps.
+      for (const side of [-1, 1]) {
+        const g = ctx.createLinearGradient(0, -12, 0, 14)
+        g.addColorStop(0, rgbaOf(pal.b0))
+        g.addColorStop(1, rgbaOf(pal.b1))
+        ctx.fillStyle = g
+        ctx.beginPath()
+        ctx.ellipse(side * 46, 12, 19, 13, side * -0.35, 0, Math.PI * 2)
+        ctx.fill()
+      }
+      ctx.restore()
+    }
+
+    function drawBlobScene(shakeX, bounceY, bare) {
+      const p = params
+      const pal = blobPalette()
+      const accent = ensureReadable(baseColor)
+      // Flottaison discrète ; l'ombre au sol rétrécit quand il saute.
+      const rise = Math.sin(t * 1.5) * 2.2 + bounceY
+      const bodyY = 112 + rise + p.sink * 0.5
+
+      if (!bare) {
+        const halo = ctx.createRadialGradient(200, 120, 10, 200, 120, 200)
+        halo.addColorStop(0, 'rgba(255,255,255,0.07)')
+        halo.addColorStop(1, 'rgba(255,255,255,0)')
+        ctx.fillStyle = halo
+        ctx.fillRect(0, 0, W, H)
+        const lift = clamp(-rise, 0, 20)
+        ctx.fillStyle = 'rgba(0,0,0,' + 0.5 * (1 - lift * 0.015) + ')'
+        ctx.beginPath()
+        ctx.ellipse(200, 214, 56 * (1 - lift * 0.012), 7, 0, 0, Math.PI * 2)
+        ctx.fill()
+      }
+
+      ctx.save()
+      ctx.translate(200 + shakeX * 0.6, bodyY)
+      ctx.rotate(-0.035)
+      const stretch = bounceY < -0.5 ? 1 + -bounceY * 0.012 : 1
+      ctx.scale(p.puff / stretch, p.puff * stretch)
+
+      // Corps.
+      const g = ctx.createLinearGradient(0, -63, 0, 63)
+      g.addColorStop(0, rgbaOf(pal.b0))
+      g.addColorStop(1, rgbaOf(pal.b1))
+      ctx.fillStyle = g
+      roundRectPath(ctx, -88, -63, 176, 126, 60)
+      ctx.fill()
+      // Reflet doux en haut à gauche.
+      const hi = ctx.createRadialGradient(-40, -48, 4, -40, -48, 70)
+      hi.addColorStop(0, 'rgba(255,255,255,' + pal.hi + ')')
+      hi.addColorStop(1, 'rgba(255,255,255,0)')
+      ctx.fillStyle = hi
+      ctx.fill()
+
+      // Yeux : deux ovales ; l'expression passe par leur forme.
+      const pulse = 1 + (p.pulse > 0.001 ? Math.sin(t * 7) * p.pulse * 0.4 : 0)
+      const arcLike = Math.max(p.arc, p.cross)
+      const blink = blinkValue * (1 - arcLike) * (1 - clamp((p.lid - 0.4) / 0.1, 0, 1))
+      const ew = p.w * 0.16 * pulse
+      let eh = p.h * 0.19 * pulse * (1 - 0.9 * blink)
+      eh *= 1 - 0.32 * clamp(p.iris, 0, 1) - 0.18 * clamp(p.slant / 38, 0, 1) // acting / concentré : yeux aplatis
+      const half = p.sep * 0.243
+      const ox = lookX * 5 * p.look + (p.shake > 0.01 ? shakeX : 0)
+      const oy = 4 + lookY * 3 * p.look
+      drawBlobEye(-1, -half + ox, oy, ew, eh, pal)
+      drawBlobEye(1, half + ox, oy, ew, eh, pal)
+      ctx.restore()
+
+      drawBlobTablet(200 + shakeX * 0.6, bodyY + 58, pal, accent)
+
+      // Petits traits d'agitation.
+      if (p.lines > 0.02) {
+        ctx.save()
+        ctx.strokeStyle = 'rgba(255,255,255,' + 0.85 * p.lines + ')'
+        ctx.lineWidth = 5
+        ctx.lineCap = 'round'
+        for (const [x1, y1, x2, y2] of [[-104, -60, -88, -46], [-112, -32, -96, -26], [104, -60, 88, -46], [112, -32, 96, -26]]) {
+          ctx.beginPath()
+          ctx.moveTo(200 + x1, bodyY + y1)
+          ctx.lineTo(200 + x2, bodyY + y2)
+          ctx.stroke()
+        }
+        ctx.restore()
+      }
+      if (!bare) drawZzz()
+    }
+
     function render() {
       const p = params
       const dpr = canvas.width / W
@@ -828,8 +1058,10 @@
       const w = p.w * pulse
       const h = p.h * pulse * (1 - 0.9 * blink)
 
-      if (p.owl > 0.5) {
+      if (kind === 'owl') {
         drawOwlScene(lx, ly, shakeX, shakeY, bounceY, w, h, p.cy + ly + shakeY)
+      } else if (kind !== 'eyes') {
+        drawBlobScene(shakeX, bounceY, false)
       } else {
         // Mascotte « yeux seuls ».
         const cy = p.cy + ly + shakeY + bounceY
@@ -845,7 +1077,16 @@
       ctx.restore()
     }
 
-    return { setMood, setBaseColor, setMascot, setLook, step, render, snap, params }
+    // Rendu sans cadre ni ombre, fond transparent : pour exporter la mascotte
+    // en image (le corps doux uniquement).
+    function renderBare() {
+      const dpr = canvas.width / W
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      ctx.clearRect(0, 0, W, H)
+      drawBlobScene(0, 0, true)
+    }
+
+    return { setMood, setBaseColor, setMascot, setLook, step, render, renderBare, snap, params }
   }
 
   global.HubiEyes = { createEyes, MOOD_NAMES, TRANSIENT_MS, W, H, hueClose }

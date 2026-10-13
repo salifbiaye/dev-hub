@@ -25,7 +25,7 @@
   let current = 'normal'
   let theme = null // thème Dev Hub suivi (null = cyan d'origine)
   let themeMap = null
-  let mascot = 'owl' // 'owl' ou 'eyes' (yeux seuls)
+  let mascot = 'light' // light | graphite | auto | owl | eyes
 
   function api() {
     return window.pywebview && window.pywebview.api ? window.pywebview.api : null

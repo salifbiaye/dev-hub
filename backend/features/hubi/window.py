@@ -17,8 +17,14 @@ from core.platform import platform_svc
 
 SIZES = {"S": (250, 150), "M": (340, 204), "L": (450, 270), "XL": (600, 360)}
 DEFAULT_SIZE = "M"
-MASCOTS = [("owl", "Hibou"), ("eyes", "Yeux seuls")]
-DEFAULT_MASCOT = "owl"
+MASCOTS = [
+    ("light", "Hubi clair"),
+    ("graphite", "Hubi graphite"),
+    ("auto", "Hubi auto (gris quand il dort)"),
+    ("owl", "Hibou"),
+    ("eyes", "Yeux seuls"),
+]
+DEFAULT_MASCOT = "light"
 MARGIN = 16  # logical px from the top-right corner of the primary screen
 TOPMOST_EVERY = 2.0  # s between z-order refreshes (full-screen apps bury it)
 
