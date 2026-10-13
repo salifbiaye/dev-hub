@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { IconCheck, IconClose, IconRefresh } from './icons'
+import { IconCheck, IconChevronLeft, IconRefresh } from './icons'
 
 function api() {
   return window.pywebview?.api
@@ -47,7 +47,7 @@ function Row({ title, hint, children }) {
 
 function Section({ title, children }) {
   return (
-    <section className="mt-6">
+    <section>
       <h3 className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-muted">{title}</h3>
       <div className="divide-y divide-border rounded-xl border border-border bg-base px-4">{children}</div>
     </section>
@@ -55,12 +55,12 @@ function Section({ title, children }) {
 }
 
 /**
- * Dev Hub's Hubi page: everything about the companion in one place (it used
+ * Dev Hub's Hubi page (a full page, like a project): everything about the companion in one place (it used
  * to be scattered through the Outils menu). Hubi itself is a separate process;
  * mascot / size / theme / sound go through config.json and it picks them up
  * on its next poll.
  */
-export function HubiPanel({ hubi, onState, onClose, onNotify, onOpenTasks, onOpenTimer }) {
+export function HubiPage({ hubi, onState, onClose, onNotify, onOpenTasks, onOpenTimer }) {
   const [busy, setBusy] = useState(null)
   const [openTasks, setOpenTasks] = useState(null)
 
@@ -69,14 +69,6 @@ export function HubiPanel({ hubi, onState, onClose, onNotify, onOpenTasks, onOpe
       ?.hubi_tasks_list?.()
       ?.then((r) => setOpenTasks((r?.tasks || []).filter((t) => !t.done).length))
   }, [])
-
-  useEffect(() => {
-    function onKey(e) {
-      if (e.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
 
   async function call(key, fn, okMessage) {
     setBusy(key)
@@ -96,24 +88,25 @@ export function HubiPanel({ hubi, onState, onClose, onNotify, onOpenTasks, onOpe
   ]
 
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-6 backdrop-blur-[2px]" onClick={onClose}>
-      <div
-        className="theme-scroll flex max-h-[88vh] w-full max-w-2xl flex-col overflow-y-auto rounded-2xl border border-border-strong bg-surface shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Hero */}
-        <div className="relative shrink-0 overflow-hidden border-b border-border px-7 pt-7 pb-6">
+    <div className="mx-auto flex w-full max-w-5xl flex-col gap-6">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={onClose}
+          className="flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[12px] text-muted transition-colors hover:bg-surface-hover hover:text-text"
+        >
+          <IconChevronLeft className="h-4 w-4" />
+          Retour
+        </button>
+        <span className="text-[12px] text-muted/60">/</span>
+        <span className="text-[12px] text-text">Hubi</span>
+      </div>
+
+      {/* Hero */}
+      <div className="relative overflow-hidden rounded-2xl border border-border bg-surface px-7 pt-7 pb-6">
           <div
-            className="pointer-events-none absolute -top-24 -right-16 h-64 w-64 rounded-full opacity-25 blur-3xl"
+            className="pointer-events-none absolute -top-24 -right-16 h-72 w-72 rounded-full opacity-25 blur-3xl"
             style={{ background: running ? 'var(--color-accent)' : 'transparent' }}
           />
-          <button
-            onClick={onClose}
-            title="Fermer (Échap)"
-            className="absolute top-4 right-4 cursor-pointer rounded-lg p-1 text-muted hover:bg-surface-hover hover:text-text"
-          >
-            <IconClose className="h-4 w-4" />
-          </button>
           <div className="relative flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:gap-6">
             <img
               src={ICON}
@@ -183,8 +176,9 @@ export function HubiPanel({ hubi, onState, onClose, onNotify, onOpenTasks, onOpe
           </div>
         </div>
 
-        <div className="shrink-0 px-7 pb-7">
-          <section className="mt-6">
+      <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+        <div className="flex flex-col gap-6">
+          <section>
             <h3 className="mb-2 text-[10.5px] font-semibold uppercase tracking-wider text-muted">Mascotte</h3>
             <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
               {mascots.map((m) => {
@@ -252,7 +246,9 @@ export function HubiPanel({ hubi, onState, onClose, onNotify, onOpenTasks, onOpe
               <Switch checked={!!hubi.sound} disabled={busy === 'sound'} onChange={(v) => setOption('sound', v)} />
             </Row>
           </Section>
+        </div>
 
+        <div className="flex flex-col gap-6">
           <Section title="Intégration">
             <Row title="Notifications de Claude Code" hint="Hubi réagit quand une session Claude attend une réponse, termine ou échoue (nouvelles sessions).">
               <Switch
@@ -271,6 +267,16 @@ export function HubiPanel({ hubi, onState, onClose, onNotify, onOpenTasks, onOpe
             <Row title="Raccourci sur le bureau" hint="Une icône Hubi pour le lancer d'un double-clic.">
               <Switch checked={!!hubi.shortcut} disabled={busy === 'shortcut'} onChange={(v) => call('shortcut', () => api()?.hubi_set_shortcut?.(v))} />
             </Row>
+          </Section>
+          <Section title="Bon à savoir">
+            <Row
+              title="Hubi vit sans Dev Hub"
+              hint="Il tourne dans son propre processus : tu peux fermer Dev Hub, il continue de suivre tes sessions et ton minuteur."
+            />
+            <Row
+              title="Le fermer ou le cacher"
+              hint="Clic droit sur son icône près de l'horloge : Afficher / masquer, Quitter, tester une humeur."
+            />
           </Section>
         </div>
       </div>

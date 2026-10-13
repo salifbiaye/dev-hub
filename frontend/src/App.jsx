@@ -94,7 +94,7 @@ import {
 } from './icons'
 import { CodeEditor, FilePreview, draftStore, previewKindForFile } from './codeEditor'
 import { HubiTasksModal } from './hubiTasks'
-import { HubiPanel } from './hubiPanel'
+import { HubiPage } from './hubiPanel'
 
 function api() {
   return window.pywebview?.api
@@ -7261,7 +7261,11 @@ export default function App() {
     window.addEventListener('focus', refreshHubi)
     return () => window.removeEventListener('focus', refreshHubi)
   }, [refreshHubi])
-  const [hubiPanelOpen, setHubiPanelOpen] = useState(false)
+  // The Hubi page takes the main area, like a project page.
+  const [hubiPageOpen, setHubiPageOpen] = useState(false)
+  useEffect(() => {
+    if (selectedPath || selectedGroup) setHubiPageOpen(false)
+  }, [selectedPath, selectedGroup])
   const [hubiTimerOpen, setHubiTimerOpen] = useState(false)
   const [hubiTasksOpen, setHubiTasksOpen] = useState(false)
   // A Hubi task sent to Claude: RepoDetail opens its IA tab, AiSessionsPanel
@@ -7655,7 +7659,7 @@ export default function App() {
   }
 
   const selectedRepo = repos.find((r) => r.path === selectedPath) || null
-  const showList = ready && !selectedRepo && !selectedGroup
+  const showList = ready && !selectedRepo && !selectedGroup && !hubiPageOpen
   const filteredGroups = groups.filter((g) => g.name.toLowerCase().includes(groupSearch.trim().toLowerCase()))
   const groupByPath = {}
   groups.forEach((g) => (g.repos || []).forEach((p) => { groupByPath[p] = g.name }))
@@ -7688,7 +7692,7 @@ export default function App() {
           <button
             onClick={() => {
               refreshHubi()
-              setHubiPanelOpen(true)
+              setHubiPageOpen(true)
             }}
             title={hubi.running ? 'Hubi (en marche)' : 'Hubi (arrêté)'}
             className="relative flex h-7 w-9 cursor-pointer items-center justify-center rounded-md border border-border hover:border-border-strong"
@@ -7790,22 +7794,6 @@ export default function App() {
 
       {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
       {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
-      {hubiPanelOpen && (
-        <HubiPanel
-          hubi={hubi}
-          onState={setHubi}
-          onClose={() => setHubiPanelOpen(false)}
-          onNotify={notify}
-          onOpenTasks={() => {
-            setHubiPanelOpen(false)
-            setHubiTasksOpen(true)
-          }}
-          onOpenTimer={() => {
-            setHubiPanelOpen(false)
-            setHubiTimerOpen(true)
-          }}
-        />
-      )}
       {hubiTimerOpen && (
         <HubiTimerModal
           onClose={() => setHubiTimerOpen(false)}
@@ -7820,6 +7808,7 @@ export default function App() {
           onNotify={notify}
           onLaunch={(task, sessionId) => {
             setHubiTasksOpen(false)
+            setHubiPageOpen(false)
             setSelectedPath(task.project)
             setTaskLaunch({ path: task.project, sessionId, prompt: task.text, nonce: Date.now() })
           }}
@@ -7943,6 +7932,16 @@ export default function App() {
         {refreshing && <PageSkeleton />}
         {/* Hidden, not unmounted, while refreshing: keeps tab/filter state. */}
         <div className={refreshing ? 'hidden' : 'contents'}>
+        {hubiPageOpen && (
+          <HubiPage
+            hubi={hubi}
+            onState={setHubi}
+            onClose={() => setHubiPageOpen(false)}
+            onNotify={notify}
+            onOpenTasks={() => setHubiTasksOpen(true)}
+            onOpenTimer={() => setHubiTimerOpen(true)}
+          />
+        )}
         {showList && (
           <div className="flex flex-col gap-4">
             <div className="flex items-center gap-1 border-b border-border">
@@ -8121,7 +8120,7 @@ export default function App() {
           </div>
         )}
 
-        {selectedGroup && !selectedRepo && (
+        {selectedGroup && !selectedRepo && !hubiPageOpen && (
           <div className="flex flex-col gap-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -8194,7 +8193,7 @@ export default function App() {
           </div>
         )}
 
-        {selectedRepo && (
+        {selectedRepo && !hubiPageOpen && (
           <RepoDetail
             repo={selectedRepo}
             ides={ides}
