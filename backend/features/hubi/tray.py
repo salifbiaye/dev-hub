@@ -1,4 +1,5 @@
-"""System-tray icon for Hubi: two little eyes that follow the current mood,
+"""System-tray icon for Hubi: the mascot artwork (frontend/public/hubi/hubi-icon.png)
+with a colored dot for alert / error / success,
 plus the menu (show/hide, size, test a mood, reset position, quit).
 
 pystray is optional: without it (or without a tray on this desktop) Hubi
@@ -34,9 +35,67 @@ _MOOD_ICON = {
 }
 
 
-def _make_image(mood):
+# Mood -> colored status dot on the mascot icon (None = plain mascot).
+_MOOD_DOT = {"error": _RED, "alert": _AMBER, "happy": _GREEN}
+_mascot_cache = {}
+
+
+def _mascot_png():
+    """frontend/public/hubi/hubi-icon.png, wherever the UI build lives."""
+    import sys
+    from pathlib import Path
+
+    if getattr(sys, "frozen", False):
+        roots = [Path(sys._MEIPASS) / "frontend" / "dist"]
+    else:
+        front = Path(__file__).resolve().parents[3] / "frontend"
+        roots = [front / "public", front / "dist"]
+    for root in roots:
+        path = root / "hubi" / "hubi-icon.png"
+        if path.is_file():
+            return path
+    return None
+
+
+def _mascot_image(size):
+    """The mascot artwork, padded to a square, or None if it can't be found."""
+    if size in _mascot_cache:
+        return _mascot_cache[size]
+    from PIL import Image
+
+    img = None
+    path = _mascot_png()
+    if path is not None:
+        src = Image.open(path).convert("RGBA")
+        src = src.crop(src.getbbox() or (0, 0, src.width, src.height))
+        side = max(src.size)
+        square = Image.new("RGBA", (side, side), (0, 0, 0, 0))
+        square.paste(src, ((side - src.width) // 2, (side - src.height) // 2))
+        img = square.resize((size, size), Image.LANCZOS)
+    _mascot_cache[size] = img
+    return img
+
+
+def _make_image(mood, size=64):
     from PIL import Image, ImageDraw
 
+    mascot = _mascot_image(size)
+    if mascot is not None:
+        img = mascot.copy()
+        if mood == "asleep":
+            # Sleeping: a bit faded, so a glance at the tray says it.
+            alpha = img.getchannel("A").point(lambda a: int(a * 0.55))
+            img.putalpha(alpha)
+        dot = _MOOD_DOT.get(mood)
+        if dot:
+            d = ImageDraw.Draw(img)
+            r = size * 0.17
+            cx, cy = size - r - 1, size - r - 1
+            d.ellipse((cx - r - 2, cy - r - 2, cx + r + 2, cy + r + 2), fill=(20, 20, 24, 255))
+            d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=dot + (255,))
+        return img
+
+    # Fallback without the artwork: the old drawn eyes.
     S = 256  # drawn large, then downscaled for smooth edges
     shape, color = _MOOD_ICON.get(mood, _MOOD_ICON["normal"])
     img = Image.new("RGBA", (S, S), (0, 0, 0, 0))
@@ -74,7 +133,7 @@ def _make_image(mood):
             d.line((cx - r, cy - r, cx + r, cy + r), fill=fill, width=24)
             d.line((cx - r, cy + r, cx + r, cy - r), fill=fill, width=24)
 
-    return img.resize((64, 64), Image.LANCZOS)
+    return img.resize((size, size), Image.LANCZOS)
 
 
 def _build_menu(on_quit):

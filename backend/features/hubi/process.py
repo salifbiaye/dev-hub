@@ -158,11 +158,14 @@ def shortcut_exists():
 
 
 def _hubi_icon_path():
-    # Hubi's own eyes (same drawing as its tray icon), not Dev Hub's logo.
+    # Hubi's own mascot (same artwork as its tray icon), not Dev Hub's logo.
     from .tray import _make_image
 
-    path = APP_DATA_DIR / "hubi.ico"
-    _make_image("normal").save(path, format="ICO", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64)])
+    # New name per artwork: Explorer caches icons by path.
+    path = APP_DATA_DIR / "hubi-mascot.ico"
+    _make_image("normal", 256).save(
+        path, format="ICO", sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+    )
     return path
 
 

@@ -7745,7 +7745,7 @@ export default function App() {
               },
               {
                 label: hubi.running ? 'Arrêter Hubi' : 'Lancer Hubi',
-                icon: <IconEye className="h-3.5 w-3.5" />,
+                icon: <img src="/hubi/hubi-icon.png" alt="" className={`h-3.5 w-4 object-contain ${hubi.running ? '' : 'opacity-60 grayscale'}`} />,
                 onClick: toggleHubiRunning,
               },
               {

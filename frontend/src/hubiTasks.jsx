@@ -15,23 +15,6 @@ function timeAgo(seconds) {
   return new Date(seconds * 1000).toLocaleDateString()
 }
 
-// Hubi's two eyes, for the header and the empty state.
-function HubiEyes({ size = 14, closed = false }) {
-  const eye = {
-    width: size,
-    height: closed ? Math.max(2, size * 0.18) : size * 1.25,
-    borderRadius: closed ? 999 : size * 0.45,
-    background: 'var(--color-accent)',
-    boxShadow: '0 0 12px color-mix(in srgb, var(--color-accent) 55%, transparent)',
-  }
-  return (
-    <span className="inline-flex items-center" style={{ gap: size * 0.45 }} aria-hidden>
-      <span style={eye} />
-      <span style={eye} />
-    </span>
-  )
-}
-
 function SessionPicker({ project, onPick, onClose }) {
   const [sessions, setSessions] = useState(null)
   useEffect(() => {
@@ -242,7 +225,7 @@ export function HubiTasksModal({ repos, onClose, onNotify, onLaunch }) {
         {/* Sidebar: scopes */}
         <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-base/40">
           <div className="flex items-center gap-2.5 px-4 pt-4 pb-3">
-            <HubiEyes size={9} />
+            <img src="/hubi/hubi-icon.png" alt="" className="h-5 w-7 object-contain" />
             <span className="text-sm font-semibold">Tâches</span>
           </div>
           <nav className="theme-scroll flex-1 space-y-0.5 overflow-y-auto px-2 pb-3">
@@ -366,7 +349,11 @@ export function HubiTasksModal({ repos, onClose, onNotify, onLaunch }) {
               </div>
             ) : visible.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 pb-6 text-center">
-                <HubiEyes size={22} closed={filter !== 'done'} />
+                <img
+                  src="/hubi/hubi-icon.png"
+                  alt=""
+                  className={`h-16 w-20 object-contain drop-shadow-lg ${filter === 'done' ? '' : 'opacity-70 grayscale'}`}
+                />
                 <p className="text-sm font-medium text-text">
                   {filter === 'done' ? 'Rien de terminé pour le moment' : 'Rien à faire ici'}
                 </p>
