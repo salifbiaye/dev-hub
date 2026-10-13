@@ -17,6 +17,14 @@ from core.platform import platform_svc
 
 SIZES = {"S": (180, 108), "M": (250, 150), "L": (340, 204), "XL": (450, 270)}
 DEFAULT_SIZE = "S"
+MASCOTS = [
+    ("light", "Hubi clair"),
+    ("graphite", "Hubi graphite"),
+    ("auto", "Hubi auto (gris quand il dort)"),
+    ("owl", "Hibou"),
+    ("eyes", "Yeux seuls"),
+]
+DEFAULT_MASCOT = "light"
 MARGIN = 16  # logical px from the top-right corner of the primary screen
 TOPMOST_EVERY = 2.0  # s between z-order refreshes (full-screen apps bury it)
 
@@ -73,6 +81,7 @@ def _cfg():
         "visible": bool(cfg.get("visible", True)),
         "follow_theme": bool(cfg.get("follow_theme", True)),
         "sound": bool(cfg.get("sound", True)),
+        "mascot": cfg.get("mascot") if cfg.get("mascot") in dict(MASCOTS) else DEFAULT_MASCOT,
         "x": cfg.get("x"),
         "y": cfg.get("y"),
     }
@@ -108,6 +117,15 @@ def is_visible():
 
 def is_created():
     return _window is not None
+
+
+def current_mascot():
+    return _cfg()["mascot"]
+
+
+def set_mascot(name):
+    if name in dict(MASCOTS):
+        _save(mascot=name)
 
 
 def follows_theme():
@@ -375,6 +393,7 @@ class HubiApi:
             "cursor": cursor,
             "idle": platform_svc.idle_seconds(),
             "theme": _current_theme(),
+            "mascot": current_mascot(),
             "cmds": cmds,
         }
 

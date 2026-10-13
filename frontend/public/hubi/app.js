@@ -25,6 +25,7 @@
   let current = 'normal'
   let theme = null // thème Dev Hub suivi (null = cyan d'origine)
   let themeMap = null
+  let mascot = 'light' // light | graphite | auto | owl | eyes
 
   // Bulle : « collante » (question en attente, minuteur fini) tant qu'on ne
   // clique pas, ou temporaire ; la temporaire passe devant.
@@ -215,6 +216,10 @@
       if (res) {
         idle = res.idle == null ? 0 : res.idle
         cursor = res.cursor ? { x: res.cursor[0], y: res.cursor[1] } : null
+        if (res.mascot && res.mascot !== mascot) {
+          mascot = res.mascot
+          eyes.setMascot(mascot)
+        }
         const wanted = res.theme || null
         if (wanted !== theme) applyTheme(wanted)
         for (const cmd of res.cmds || []) handleCommand(cmd)

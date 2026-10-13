@@ -50,6 +50,7 @@ class HubiMixin:
             "autostart": process.autostart_enabled(),
             "shortcut": process.shortcut_exists(),
             "claude_hooks": hooks,
+            "mascot": window.current_mascot(),
         }
 
     def hubi_set_claude_hooks(self, enabled):

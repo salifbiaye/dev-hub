@@ -93,6 +93,17 @@ def _build_menu(on_quit):
             for key in window.SIZES
         ]
 
+    def mascots():
+        return [
+            item(
+                label,
+                (lambda n: lambda icon, it: window.set_mascot(n))(name),
+                checked=(lambda n: lambda it: window.current_mascot() == n)(name),
+                radio=True,
+            )
+            for name, label in window.MASCOTS
+        ]
+
     def moods():
         return [
             item(label, (lambda n: lambda icon, it: window.send_mood(n, None if n != "normal" else 0))(name))
@@ -139,6 +150,7 @@ def _build_menu(on_quit):
         item("Minuteur", menu(lambda: iter(timer_items()))),
         menu.SEPARATOR,
         item("Taille", menu(*sizes())),
+        item("Mascotte", menu(*mascots())),
         item("Tester une humeur", menu(*moods())),
         item(
             "Yeux aux couleurs du thème",
