@@ -41,6 +41,12 @@
     shake: 0, // amplitude de tremblement (px)
     pulse: 0, // amplitude de pulsation (échelle)
     bounce: 0, // amplitude de rebond (px)
+    owl: 1, // 0..1 : corps de hibou autour des yeux (0 = yeux seuls)
+    tuft: 0, // px : houppes des oreilles (positif = dressées, négatif = baissées)
+    puff: 1, // gonflement des plumes de la tête
+    sink: 0, // px : le hibou s'affaisse (somnolent, endormi)
+    flap: 0, // 0..1 : agitation des ailes
+    spread: 0, // px : ailes écartées (sursaut, alerte)
     r_: CYAN[0],
     g_: CYAN[1],
     b_: CYAN[2],
@@ -48,19 +54,19 @@
 
   const PRESETS = {
     normal: {},
-    sleepy: { lid: 0.5, cy: 102, hi: 0.35, look: 0.3 },
-    asleep: { lid: 0.93, cy: 92, hi: 0.2, look: 0, zzz: 1, glow: 14 },
-    startle: { w: 112, h: 156, sep: 148, r: 40, cy: 100, glow: 28 },
-    excited: { w: 106, h: 134, sep: 150, cy: 102, r: 38, bounce: 5 },
-    laugh: { arc: 1, cy: 68, mouth: 1, bounce: 6, look: 0 },
-    focused: { h: 112, cy: 108, lid: 0.27, slant: 38, look: 0.5 },
-    acting: { w: 112, h: 119, sep: 156, cy: 104, r: 38, iris: 1, lid: 0.08, slant: 14, hi: 0, look: 0.4 },
-    fear: { w: 46, h: 60, sep: 132, cy: 99, r: 14, shake: 3, glow: 14, look: 0.4 },
+    sleepy: { lid: 0.5, cy: 102, hi: 0.35, look: 0.3, sink: 4, tuft: -4 },
+    asleep: { lid: 0.93, cy: 92, hi: 0.2, look: 0, zzz: 1, glow: 14, sink: 10, tuft: -9, puff: 0.97 },
+    startle: { w: 112, h: 156, sep: 148, r: 40, cy: 100, glow: 28, tuft: 12, puff: 1.04, spread: 10 },
+    excited: { w: 106, h: 134, sep: 150, cy: 102, r: 38, bounce: 5, tuft: 6, flap: 0.5 },
+    laugh: { arc: 1, cy: 68, mouth: 1, bounce: 6, look: 0, flap: 1, tuft: 3 },
+    focused: { h: 112, cy: 108, lid: 0.27, slant: 38, look: 0.5, tuft: -5 },
+    acting: { w: 112, h: 119, sep: 156, cy: 104, r: 38, iris: 1, lid: 0.08, slant: 14, hi: 0, look: 0.4, flap: 0.45 },
+    fear: { w: 46, h: 60, sep: 132, cy: 99, r: 14, shake: 3, glow: 14, look: 0.4, puff: 1.06, tuft: -8 },
     error: { cross: 1, cy: 100, r_: RED[0], g_: RED[1], b_: RED[2], look: 0 },
-    listening: { h: 100, cy: 76, notepad: 1, look: 0.4 },
-    understood: { h: 104, cy: 74, wink: 1, thumb: 1, look: 0 },
-    alert: { w: 110, h: 140, sep: 152, cy: 101, r: 38, pulse: 0.05, shake: 1.4, r_: AMBER[0], g_: AMBER[1], b_: AMBER[2], glow: 28 },
-    happy: { arc: 1, cy: 84, r_: GREEN[0], g_: GREEN[1], b_: GREEN[2], look: 0 },
+    listening: { h: 100, cy: 76, notepad: 1, look: 0.4, tuft: 3 },
+    understood: { h: 104, cy: 74, wink: 1, thumb: 1, look: 0, tuft: 4 },
+    alert: { w: 110, h: 140, sep: 152, cy: 101, r: 38, pulse: 0.05, shake: 1.4, r_: AMBER[0], g_: AMBER[1], b_: AMBER[2], glow: 28, tuft: 14, puff: 1.04, spread: 6 },
+    happy: { arc: 1, cy: 84, r_: GREEN[0], g_: GREEN[1], b_: GREEN[2], look: 0, flap: 0.8, tuft: 4 },
   }
 
   const MOOD_NAMES = Object.keys(PRESETS)
@@ -151,6 +157,7 @@
     // un sens (alerte ambre, erreur rouge, content vert) gardent la leur.
     let baseColor = CYAN
     let alertRing = false
+    let mascotOwl = true
     let moodName = 'normal'
 
     function setMood(name) {
@@ -158,6 +165,12 @@
       const tint = { r_: baseColor[0], g_: baseColor[1], b_: baseColor[2] }
       target = Object.assign({}, BASE, tint, PRESETS[moodName])
       if (moodName === 'alert' && alertRing) target.ring = 1
+      target.owl = mascotOwl ? 1 : 0
+    }
+
+    function setMascot(name) {
+      mascotOwl = name !== 'eyes'
+      setMood(moodName)
     }
 
     function setBaseColor(rgb) {
@@ -520,6 +533,170 @@
       ctx.restore()
     }
 
+
+    // ---------------------------------------------------------------- hibou
+    // Tout est dessiné en code, teinté par la couleur courante des yeux
+    // (accent du thème, ou ambre/rouge/vert selon l'humeur). Les couches
+    // bougent à des vitesses différentes selon la direction du regard, ce qui
+    // donne un petit effet de profondeur.
+
+    function shade(f, a) {
+      return 'rgba(' + Math.round(params.r_ * f) + ',' + Math.round(params.g_ * f) + ',' + Math.round(params.b_ * f) + ',' + (a === undefined ? 1 : a) + ')'
+    }
+
+    function cream(a) {
+      // Bec : la couleur courante très éclaircie.
+      const m = (v) => Math.round(v + (255 - v) * 0.78)
+      return 'rgba(' + m(params.r_) + ',' + m(params.g_) + ',' + m(params.b_) + ',' + a + ')'
+    }
+
+    function drawTuft(side, lx, lift, spread) {
+      const x = side * (W / 2 - 48) // base extérieure de la houppe
+      const apexY = Math.max(2, 8 - lift)
+      ctx.save()
+      ctx.translate(W / 2 + lx - side * 0 + side * spread * 0.5, 0)
+      ctx.fillStyle = shade(0.36)
+      ctx.strokeStyle = shade(1, 0.3)
+      ctx.lineWidth = 2.5
+      ctx.lineJoin = 'round'
+      ctx.beginPath()
+      ctx.moveTo(x * 1 + 0, 84)
+      ctx.quadraticCurveTo(x * 1.02, apexY + 24, x * 0.9, apexY)
+      ctx.quadraticCurveTo(x * 0.55, apexY + 8, x * 0.42, 44)
+      ctx.closePath()
+      ctx.fill()
+      ctx.stroke()
+      ctx.restore()
+    }
+
+    function drawWing(side, flapAmp, spread) {
+      ctx.save()
+      const shoulderX = W / 2 + side * 168 + side * spread
+      const shoulderY = 150
+      ctx.translate(shoulderX, shoulderY)
+      ctx.rotate(side * (0.12 + Math.sin(t * 11) * flapAmp * 0.22 + (flapAmp > 0 ? Math.sin(t * 17) * flapAmp * 0.05 : 0)))
+      ctx.fillStyle = shade(0.34)
+      ctx.strokeStyle = shade(1, 0.35)
+      ctx.lineWidth = 2.5
+      ctx.beginPath()
+      ctx.ellipse(0, 52, 30, 64, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+      // Plumes de l'aile.
+      ctx.lineCap = 'round'
+      for (let i = 0; i < 3; i++) {
+        ctx.beginPath()
+        ctx.moveTo(-14 + i * 14, 34 + i * 4)
+        ctx.lineTo(-14 + i * 14, 90 - i * 6)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
+
+    function drawChest(lx) {
+      ctx.save()
+      ctx.translate(lx, 0)
+      ctx.strokeStyle = shade(1, 0.2)
+      ctx.lineWidth = 3.5
+      ctx.lineCap = 'round'
+      for (let row = 0; row < 3; row++) {
+        const y = 180 + row * 22
+        const off = row % 2 ? 18 : 0
+        for (let x = 62 + off; x <= 338; x += 36) {
+          ctx.beginPath()
+          ctx.moveTo(x - 14, y)
+          ctx.quadraticCurveTo(x, y + 14, x + 14, y)
+          ctx.stroke()
+        }
+      }
+      ctx.restore()
+    }
+
+    function drawOwlBack(lx, ly, shakeX, bounceY) {
+      const a = params.owl
+      if (a < 0.01) return
+      const p = params
+      ctx.save()
+      ctx.globalAlpha = a
+      // Tout le hibou s'affaisse quand il somnole.
+      ctx.translate(shakeX * 0.6, p.sink + bounceY * 0.5)
+
+      // Houppes d'oreilles.
+      drawTuft(-1, lx * 0.3, p.tuft, p.spread)
+      drawTuft(1, lx * 0.3, p.tuft, p.spread)
+
+      // Tête et corps : une ellipse prolongée jusqu'en bas du panneau.
+      ctx.save()
+      ctx.translate(W / 2 + lx * 0.2, 134)
+      ctx.scale(p.puff, p.puff)
+      ctx.fillStyle = shade(0.26)
+      ctx.beginPath()
+      ctx.ellipse(0, 0, 186, 112, 0, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillRect(-186, 0, 372, 130)
+      ctx.restore()
+
+      // Ailes, sur les flancs de la tête.
+      drawWing(-1, p.flap, p.spread)
+      drawWing(1, p.flap, p.spread)
+
+      drawChest(lx * 0.2)
+
+      // Disques faciaux autour des yeux : ils suivent le regard à demi-vitesse.
+      const dx = lx * 0.55
+      const dy = ly * 0.5
+      const discR = 78 + Math.max(0, p.h - 120) * 0.35
+      for (const side of [-1, 1]) {
+        const cx = W / 2 + side * Math.max(60, p.sep / 2) + dx
+        ctx.save()
+        ctx.fillStyle = shade(0.42)
+        ctx.strokeStyle = shade(1, 0.4)
+        ctx.lineWidth = 3
+        ctx.beginPath()
+        ctx.arc(cx, 102 + dy, discR, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.stroke()
+        ctx.restore()
+      }
+      ctx.restore()
+    }
+
+    function drawOwlBeak(lx, ly, shakeX, bounceY) {
+      const a = params.owl
+      if (a < 0.01) return
+      const p = params
+      ctx.save()
+      ctx.globalAlpha = a
+      ctx.translate(W / 2 + lx * 0.75 + shakeX * 0.6, 119 + ly * 0.6 + p.sink + bounceY * 0.5)
+      ctx.shadowColor = shade(1, 0.5)
+      ctx.shadowBlur = 8
+      // Bec du haut : petit crochet.
+      ctx.fillStyle = cream(1)
+      ctx.beginPath()
+      ctx.moveTo(-17, 0)
+      ctx.quadraticCurveTo(0, -12, 17, 0)
+      ctx.quadraticCurveTo(9, 22, 0, 32 - p.mouth * 3)
+      ctx.quadraticCurveTo(-9, 22, -17, 0)
+      ctx.closePath()
+      ctx.fill()
+      ctx.shadowBlur = 0
+      // Rire : le bec s'ouvre, intérieur sombre puis bec du bas.
+      if (p.mouth > 0.02) {
+        const drop = p.mouth * 17
+        ctx.fillStyle = 'rgba(0, 0, 0, ' + 0.7 * p.mouth + ')'
+        ctx.beginPath()
+        ctx.ellipse(0, 25 + drop * 0.45, 12, 2 + drop * 0.75, 0, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.fillStyle = cream(p.mouth)
+        ctx.beginPath()
+        ctx.moveTo(-11, 26 + drop * 0.7)
+        ctx.quadraticCurveTo(0, 44 + drop * 1.1, 11, 26 + drop * 0.7)
+        ctx.quadraticCurveTo(0, 30 + drop * 0.8, -11, 26 + drop * 0.7)
+        ctx.fill()
+      }
+      ctx.restore()
+    }
+
     function render() {
       const p = params
       const dpr = canvas.width / W
@@ -546,12 +723,16 @@
       const w = p.w * pulse
       const h = p.h * pulse * (1 - 0.9 * blink)
 
-      const cy = p.cy + ly + shakeY + bounceY
+      drawOwlBack(lx, ly, shakeX, bounceY)
+
+      const cy = p.cy + ly + shakeY + bounceY + p.sink * p.owl
       const half = p.sep / 2
       drawEye(-1, W / 2 - half + lx + shakeX, cy, w, h)
       drawEye(1, W / 2 + half + lx + shakeX, cy, w, h)
 
-      drawMouth(W / 2 + lx * 0.4 + shakeX, 187 + bounceY)
+      drawOwlBeak(lx, ly, shakeX, bounceY)
+      // Sans corps de hibou (mascotte « yeux seuls »), l'ancienne bouche.
+      if (p.owl < 0.5) drawMouth(W / 2 + lx * 0.4 + shakeX, 187 + bounceY)
       drawZzz()
       drawNotepad(W / 2, 196)
       drawThumb(W / 2 - 4, 188)
@@ -559,7 +740,7 @@
       ctx.restore()
     }
 
-    return { setMood, setBaseColor, setLook, step, render, snap, params }
+    return { setMood, setBaseColor, setMascot, setLook, step, render, snap, params }
   }
 
   global.HubiEyes = { createEyes, MOOD_NAMES, TRANSIENT_MS, W, H, hueClose }

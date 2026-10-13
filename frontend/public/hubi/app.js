@@ -25,6 +25,7 @@
   let current = 'normal'
   let theme = null // thème Dev Hub suivi (null = cyan d'origine)
   let themeMap = null
+  let mascot = 'owl' // 'owl' ou 'eyes' (yeux seuls)
 
   function api() {
     return window.pywebview && window.pywebview.api ? window.pywebview.api : null
@@ -150,6 +151,10 @@
       if (res) {
         idle = res.idle == null ? 0 : res.idle
         cursor = res.cursor ? { x: res.cursor[0], y: res.cursor[1] } : null
+        if (res.mascot && res.mascot !== mascot) {
+          mascot = res.mascot
+          eyes.setMascot(mascot)
+        }
         const wanted = res.theme || null
         if (wanted !== theme) applyTheme(wanted)
         for (const cmd of res.cmds || []) {

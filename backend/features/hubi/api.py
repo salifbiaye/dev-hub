@@ -32,6 +32,7 @@ class HubiMixin:
             "size": window.current_size(),
             "mood": window.current_mood(),
             "follow_theme": window.follows_theme(),
+            "mascot": window.current_mascot(),
         }
 
     def hubi_set_enabled(self, enabled):
