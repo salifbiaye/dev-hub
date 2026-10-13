@@ -540,8 +540,8 @@
     // (accent du thème, ou ambre/rouge/vert selon l'humeur). Les yeux sont
     // ceux des 14 humeurs, simplement réduits (EYE_SCALE) pour tenir dans la tête.
 
-    const EYE_SCALE = 0.78
-    const EYE_CENTER_Y = 96 // où tombe cy = 100 (centre des yeux) sur le cadre
+    const EYE_SCALE = 0.72
+    const EYE_CENTER_Y = 84 // où tombe cy = 100 (centre des yeux) sur le cadre
 
     function shade(f, a) {
       return 'rgba(' + Math.round(params.r_ * f) + ',' + Math.round(params.g_ * f) + ',' + Math.round(params.b_ * f) + ',' + (a === undefined ? 1 : a) + ')'
@@ -612,14 +612,14 @@
 
     function drawFeet() {
       ctx.save()
-      ctx.strokeStyle = shade(0.55)
-      ctx.lineWidth = 4
+      ctx.strokeStyle = cream(0.8)
+      ctx.lineWidth = 5
       ctx.lineCap = 'round'
-      for (const x of [176, 224]) {
-        for (const a of [-0.5, 0, 0.5]) {
+      for (const x of [178, 222]) {
+        for (const a of [-0.55, 0, 0.55]) {
           ctx.beginPath()
-          ctx.moveTo(x, 212)
-          ctx.lineTo(x + Math.sin(a) * 11, 212 + Math.cos(a) * 9)
+          ctx.moveTo(x, 216)
+          ctx.lineTo(x + Math.sin(a) * 14, 216 + Math.cos(a) * 10)
           ctx.stroke()
         }
       }
@@ -627,40 +627,59 @@
     }
 
     function drawWing(side, flapAmp, spread) {
+      // Aile repliée le long du corps, pointe vers le bas ; dessinée pour le
+      // côté droit puis retournée pour le gauche.
       ctx.save()
-      ctx.translate(200 + side * 68, 158)
+      ctx.translate(200 + side * 70, 158)
       const swing = Math.sin(t * 11) * flapAmp * 0.25 + (flapAmp > 0 ? Math.sin(t * 17) * flapAmp * 0.05 : 0)
-      ctx.rotate(side * (0.14 + swing + spread * 0.045))
-      ctx.fillStyle = shade(0.13)
+      ctx.rotate(side * (swing + spread * 0.045))
+      ctx.scale(side, 1)
+      ctx.fillStyle = vgrad(0, 62, shade(0.4), shade(0.24))
       ctx.beginPath()
-      ctx.ellipse(0, 26, 19, 44, 0, 0, Math.PI * 2)
+      ctx.moveTo(-8, 0)
+      ctx.bezierCurveTo(20, 10, 22, 44, -12, 62)
+      ctx.bezierCurveTo(-26, 44, -26, 14, -16, 2)
+      ctx.closePath()
       ctx.fill()
+      // Liseré sur le bord extérieur de l'aile.
+      ctx.strokeStyle = shade(1, 0.4)
+      ctx.lineWidth = 1.8
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.moveTo(-8, 1)
+      ctx.bezierCurveTo(20, 10, 22, 44, -12, 62)
+      ctx.stroke()
       ctx.restore()
     }
 
     function drawBody() {
       ctx.save()
-      ctx.fillStyle = vgrad(144, 228, shade(0.2), shade(0.1))
+      // Corps en poire : épaules étroites sous la tête, large assise sur la branche.
+      ctx.fillStyle = vgrad(146, 226, shade(0.28), shade(0.15))
       ctx.beginPath()
-      ctx.ellipse(200, 184, 78, 44, 0, 0, Math.PI * 2)
+      ctx.moveTo(144, 148)
+      ctx.bezierCurveTo(108, 164, 104, 204, 130, 217)
+      ctx.quadraticCurveTo(200, 233, 270, 217)
+      ctx.bezierCurveTo(296, 204, 292, 164, 256, 148)
+      ctx.closePath()
       ctx.fill()
       // Ventre un peu plus clair.
-      ctx.fillStyle = shade(0.2, 0.7)
+      ctx.fillStyle = shade(0.34, 0.7)
       ctx.beginPath()
-      ctx.ellipse(200, 192, 42, 32, 0, 0, Math.PI * 2)
+      ctx.ellipse(200, 190, 34, 28, 0, 0, Math.PI * 2)
       ctx.fill()
       ctx.restore()
     }
 
     function drawTuft(side, lift, spread) {
-      const apexY = Math.max(2, 14 - lift)
+      const apexY = Math.max(2, 6 - lift)
       ctx.save()
-      ctx.translate(200 + side * (96 + spread * 0.4), 0)
+      ctx.translate(200 + side * (88 + spread * 0.4), 0)
       const path = () => {
         ctx.beginPath()
-        ctx.moveTo(-side * 36, 46)
-        ctx.quadraticCurveTo(side * 6, apexY + 28, side * 14, apexY)
-        ctx.quadraticCurveTo(side * 36, apexY + 18, side * 34, 54)
+        ctx.moveTo(-side * 34, 38)
+        ctx.quadraticCurveTo(side * 6, apexY + 24, side * 14, apexY)
+        ctx.quadraticCurveTo(side * 34, apexY + 16, side * 32, 46)
         ctx.closePath()
       }
       ctx.fillStyle = shade(0.2)
@@ -673,18 +692,18 @@
       const p = params
       // Tête : silhouette sombre + liseré lumineux sur le dessus.
       ctx.save()
-      ctx.fillStyle = vgrad(14, 186, shade(0.22), shade(0.12))
+      ctx.fillStyle = vgrad(6, 166, shade(0.24), shade(0.13))
       ctx.beginPath()
-      ctx.ellipse(200, 100, 130, 86, 0, 0, Math.PI * 2)
+      ctx.ellipse(200, 88, 120, 78, 0, 0, Math.PI * 2)
       ctx.fill()
       ctx.restore()
       rim(() => {
         ctx.beginPath()
-        ctx.ellipse(200, 100, 129, 85, 0, Math.PI * 1.08, Math.PI * 1.92)
+        ctx.ellipse(200, 88, 119, 77, 0, Math.PI * 1.08, Math.PI * 1.92)
       }, 0.5)
 
       // Disques faciaux : un peu plus clairs, sans contour, doux autour des yeux.
-      const discR = 61 + Math.max(0, p.h - 120) * 0.28
+      const discR = 56 + Math.max(0, p.h - 120) * 0.26
       const sepHalf = Math.max(48, (p.sep * EYE_SCALE) / 2)
       for (const side of [-1, 1]) {
         const cx = 200 + side * sepHalf + lx * 0.4
@@ -704,8 +723,8 @@
     function drawBeak(lx, ly) {
       const p = params
       ctx.save()
-      ctx.translate(200 + lx * 0.7, 113 + ly * 0.5)
-      ctx.scale(0.72, 0.72)
+      ctx.translate(200 + lx * 0.7, 101 + ly * 0.5)
+      ctx.scale(0.66, 0.66)
       ctx.shadowColor = shade(1, 0.5)
       ctx.shadowBlur = 6
       ctx.fillStyle = cream(1)
@@ -749,10 +768,10 @@
       // Tête : s'affaisse (somnolent), se gonfle (peur), s'incline vers le curseur.
       ctx.save()
       ctx.translate(0, p.sink)
-      ctx.translate(200, 168)
+      ctx.translate(200, 160)
       ctx.rotate(lookX * 0.05 * p.look)
       ctx.scale(p.puff, p.puff)
-      ctx.translate(-200, -168)
+      ctx.translate(-200, -160)
       drawTuft(-1, p.tuft, p.spread)
       drawTuft(1, p.tuft, p.spread)
       drawHead(ly * EYE_SCALE, lx * EYE_SCALE)
