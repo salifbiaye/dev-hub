@@ -127,7 +127,7 @@
     osc.frequency.value = freq
     const t0 = audio.currentTime + start
     gain.gain.setValueAtTime(0, t0)
-    gain.gain.linearRampToValueAtTime(0.06, t0 + 0.015)
+    gain.gain.linearRampToValueAtTime(0.2, t0 + 0.015)
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur)
     osc.connect(gain).connect(audio.destination)
     osc.start(t0)
@@ -146,8 +146,12 @@
     if (!notes) return
     try {
       audio = audio || new (window.AudioContext || window.webkitAudioContext)()
-      if (audio.state === 'suspended') audio.resume()
-      for (const n of notes) tone(n[0], n[1], n[2], n[3])
+      const play = () => {
+        for (const n of notes) tone(n[0], n[1], n[2], n[3])
+      }
+      // Notes scheduled while the context is still suspended would be lost.
+      if (audio.state === 'suspended') audio.resume().then(play, () => {})
+      else play()
     } catch (e) {
       // Pas d'audio disponible : tant pis.
     }

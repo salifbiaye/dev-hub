@@ -165,7 +165,7 @@ def _build_menu(on_quit):
 
     def moods():
         return [
-            item(label, (lambda n: lambda icon, it: window.send_mood(n, None if n != "normal" else 0))(name))
+            item(label, (lambda n: lambda icon, it: _test_mood(n))(name))
             for name, label in window.MOODS
         ]
 
@@ -271,6 +271,16 @@ def _complete_task(task_id):
 
     tasks.toggle(task_id)
     runtime.tasks_changed()
+
+
+# Sound heard with each mood when it's tested from the menu (same as real events).
+_MOOD_SOUND = {"listening": "waiting", "alert": "waiting", "happy": "done", "understood": "done", "error": "error"}
+
+
+def _test_mood(name):
+    window.send_mood(name, None if name != "normal" else 0)
+    if name in _MOOD_SOUND:
+        reactions._beep(_MOOD_SOUND[name])
 
 
 def _open_quick_add():

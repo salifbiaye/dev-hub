@@ -94,6 +94,7 @@ import {
 } from './icons'
 import { CodeEditor, FilePreview, draftStore, previewKindForFile } from './codeEditor'
 import { HubiTasksModal } from './hubiTasks'
+import { HubiPanel } from './hubiPanel'
 
 function api() {
   return window.pywebview?.api
@@ -7260,26 +7261,7 @@ export default function App() {
     window.addEventListener('focus', refreshHubi)
     return () => window.removeEventListener('focus', refreshHubi)
   }, [refreshHubi])
-  async function toggleHubiRunning() {
-    const s = await api()?.hubi_set_running?.(!hubi.running)
-    if (s) setHubi(s)
-  }
-  async function toggleHubiAutostart() {
-    const s = await api()?.hubi_set_autostart?.(!hubi.autostart)
-    if (s?.error) notify(s.error, true)
-    if (s) setHubi({ running: !!s.running, autostart: !!s.autostart, shortcut: !!s.shortcut, claude_hooks: !!s.claude_hooks })
-  }
-  async function toggleHubiShortcut() {
-    const r = await api()?.hubi_set_shortcut?.(!hubi.shortcut)
-    if (r?.error) notify(r.error, true)
-    if (r) setHubi({ running: !!r.running, autostart: !!r.autostart, shortcut: !!r.shortcut, claude_hooks: !!r.claude_hooks })
-  }
-  async function toggleHubiClaudeHooks() {
-    const r = await api()?.hubi_set_claude_hooks?.(!hubi.claude_hooks)
-    if (r?.error) notify(r.error, true)
-    else if (r) notify(r.claude_hooks ? 'Hubi sera notifié par Claude Code (nouvelles sessions)' : 'Hooks Claude Code de Hubi retirés')
-    if (r) setHubi({ running: !!r.running, autostart: !!r.autostart, shortcut: !!r.shortcut, claude_hooks: !!r.claude_hooks })
-  }
+  const [hubiPanelOpen, setHubiPanelOpen] = useState(false)
   const [hubiTimerOpen, setHubiTimerOpen] = useState(false)
   const [hubiTasksOpen, setHubiTasksOpen] = useState(false)
   // A Hubi task sent to Claude: RepoDetail opens its IA tab, AiSessionsPanel
@@ -7704,6 +7686,21 @@ export default function App() {
             <span className="ml-1 rounded border border-border px-1 font-mono text-[10px] text-muted">Ctrl K</span>
           </Button>
           <button
+            onClick={() => {
+              refreshHubi()
+              setHubiPanelOpen(true)
+            }}
+            title={hubi.running ? 'Hubi (en marche)' : 'Hubi (arrêté)'}
+            className="relative flex h-7 w-9 cursor-pointer items-center justify-center rounded-md border border-border hover:border-border-strong"
+          >
+            <img
+              src="/hubi/hubi-icon.png"
+              alt="Hubi"
+              className={`h-4 w-6 object-contain transition-all ${hubi.running ? '' : 'opacity-50 grayscale'}`}
+            />
+            {hubi.running && <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full border border-surface bg-success" />}
+          </button>
+          <button
             onClick={() => setShortcutsOpen(true)}
             title="Raccourcis clavier (Ctrl H)"
             className="flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted hover:text-text hover:border-border-strong cursor-pointer"
@@ -7742,36 +7739,6 @@ export default function App() {
                 label: 'Paramètres IA',
                 icon: <IconSettings className="h-3.5 w-3.5" />,
                 onClick: () => setAiSettingsOpen(true),
-              },
-              {
-                label: hubi.running ? 'Arrêter Hubi' : 'Lancer Hubi',
-                icon: <img src="/hubi/hubi-icon.png" alt="" className={`h-3.5 w-4 object-contain ${hubi.running ? '' : 'opacity-60 grayscale'}`} />,
-                onClick: toggleHubiRunning,
-              },
-              {
-                label: `Raccourci Hubi sur le bureau : ${hubi.shortcut ? 'oui' : 'non'}`,
-                icon: <IconExternal className="h-3.5 w-3.5" />,
-                onClick: toggleHubiShortcut,
-              },
-              {
-                label: `Hubi au démarrage de Windows : ${hubi.autostart ? 'oui' : 'non'}`,
-                icon: <IconPlay className="h-3.5 w-3.5" />,
-                onClick: toggleHubiAutostart,
-              },
-              {
-                label: `Hubi notifié par Claude Code : ${hubi.claude_hooks ? 'oui' : 'non'}`,
-                icon: <IconSparkle className="h-3.5 w-3.5" />,
-                onClick: toggleHubiClaudeHooks,
-              },
-              {
-                label: 'Minuteur Hubi…',
-                icon: <IconRefresh className="h-3.5 w-3.5" />,
-                onClick: () => setHubiTimerOpen(true),
-              },
-              {
-                label: 'Tâches',
-                icon: <IconCheck className="h-3.5 w-3.5" />,
-                onClick: () => setHubiTasksOpen(true),
               },
             ]}
           />
@@ -7823,6 +7790,22 @@ export default function App() {
 
       {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
       {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
+      {hubiPanelOpen && (
+        <HubiPanel
+          hubi={hubi}
+          onState={setHubi}
+          onClose={() => setHubiPanelOpen(false)}
+          onNotify={notify}
+          onOpenTasks={() => {
+            setHubiPanelOpen(false)
+            setHubiTasksOpen(true)
+          }}
+          onOpenTimer={() => {
+            setHubiPanelOpen(false)
+            setHubiTimerOpen(true)
+          }}
+        />
+      )}
       {hubiTimerOpen && (
         <HubiTimerModal
           onClose={() => setHubiTimerOpen(false)}

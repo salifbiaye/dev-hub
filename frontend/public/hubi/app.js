@@ -25,7 +25,7 @@
   let current = 'normal'
   let theme = null // thème Dev Hub suivi (null = cyan d'origine)
   let themeMap = null
-  let mascot = 'light' // light | graphite | auto | owl | eyes
+  let mascot = 'light' // light | graphite | auto
 
   // Bulle : « collante » (question en attente, minuteur fini) tant qu'on ne
   // clique pas, ou temporaire ; la temporaire passe devant.

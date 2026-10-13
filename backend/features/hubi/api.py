@@ -51,7 +51,36 @@ class HubiMixin:
             "shortcut": process.shortcut_exists(),
             "claude_hooks": hooks,
             "mascot": window.current_mascot(),
+            "mascots": [{"id": k, "label": v} for k, v in window.MASCOTS],
+            "size": window.current_size(),
+            "sizes": list(window.SIZES),
+            "follow_theme": window.follows_theme(),
+            "sound": window.sound_enabled(),
         }
+
+    def hubi_test_sound(self):
+        from . import client, process
+
+        if not process.is_running():
+            return {"error": "Lance Hubi pour l'entendre"}
+        if not client.send_sync("/event", {"kind": "sound_test"}):
+            return {"error": "Hubi ne répond pas"}
+        return {"ok": True}
+
+    def hubi_set_option(self, key, value):
+        """Dev Hub's Hubi page. Only writes config.json: the Hubi process
+        reads these on its next poll (mascot, size, theme, sound)."""
+        if key == "mascot" and value in dict(window.MASCOTS):
+            window.set_mascot(value)
+        elif key == "size" and value in window.SIZES:
+            window.save_size(value)
+        elif key == "follow_theme":
+            window.set_follow_theme(bool(value))
+        elif key == "sound":
+            window.set_sound(bool(value))
+        else:
+            return {"error": "Réglage inconnu", **self.hubi_get_state()}
+        return {"ok": True, **self.hubi_get_state()}
 
     def hubi_set_claude_hooks(self, enabled):
         from . import channel, claude_hooks

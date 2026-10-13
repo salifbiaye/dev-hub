@@ -7,7 +7,7 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 ## Non publié
 
 ### ✨ Nouveautés
-- Hubi (bêta, désactivé par défaut) : un petit compagnon qui flotte en haut à droite de l'écran, toujours au-dessus, sans voler le focus. Corps doux et neutre (blanc, graphite, ou « auto » : blanc éveillé, gris quand il dort), deux ovales pour yeux, et des mains qui sortent avec une tablette montrant l'état de la session seulement quand elles servent (la couleur du thème n'apparaît que sur la tablette). 14 humeurs, regard qui suit le curseur, clignements, sommeil après 60 s d'inactivité, rire au clic, déplaçable à la souris, tailles S/M/L/XL, icône de zone de notification avec menu. Mascottes alternatives dans le menu : hibou et yeux seuls. À activer avec `"hubi": {"enabled": true}` dans `config.json`, `DEV_HUB_HUBI=1`, ou seul avec `python backend/hubi_main.py`. Images de la mascotte dans `docs/mascot/`
+- Hubi (bêta, désactivé par défaut) : un petit compagnon qui flotte en haut à droite de l'écran, toujours au-dessus, sans voler le focus. Corps doux et neutre (blanc, graphite, ou « auto » : blanc éveillé, gris quand il dort), deux ovales pour yeux, et des mains qui sortent avec une tablette montrant l'état de la session seulement quand elles servent (la couleur du thème n'apparaît que sur la tablette). 14 humeurs, regard qui suit le curseur, clignements, sommeil après 60 s d'inactivité, rire au clic, déplaçable à la souris, tailles S/M/L/XL, icône de zone de notification avec menu. À activer avec `"hubi": {"enabled": true}` dans `config.json`, `DEV_HUB_HUBI=1`, ou seul avec `python backend/hubi_main.py`. Images de la mascotte dans `docs/mascot/`
 
 ## [0.5.0] - 2026-10-06
 

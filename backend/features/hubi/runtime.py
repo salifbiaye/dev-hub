@@ -21,6 +21,10 @@ def _on_event(payload):
             target=quick_add._play_noting, args=({"text": str(payload.get("message") or "")[:300]},), daemon=True
         ).start()
         return
+    if kind == "sound_test":
+        window.push_cmd("beep", "done")  # even with sounds off: it's a test
+        window.send_mood("happy")
+        return
     if kind in ("claude_working", "claude_waiting", "claude_done", "claude_error", "run_error", "run_done", "info"):
         reactions.handle_event(kind, payload.get("project"), payload.get("message"), None)
 

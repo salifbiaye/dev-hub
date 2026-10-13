@@ -1,6 +1,8 @@
 """Cross-cutting app config: where it lives on disk, versioning, and the
 one-time migrations load_config() applies to older config.json files."""
 import json
+import os
+import time
 
 from core.platform import platform_svc
 
@@ -24,9 +26,22 @@ STALE_IDE_ALIASES = {"idea": "idea1"}
 FASTER_CLAUDE_CLI = 'claude -p --setting-sources user --strict-mcp-config --tools "" --no-session-persistence'
 
 
+def _read_config_file():
+    # Dev Hub and Hubi (two processes) share this file and Hubi reads it many
+    # times a second: on Windows the atomic replace in save_config() can still
+    # make a read fail for a few milliseconds, so retry briefly.
+    for attempt in range(10):
+        try:
+            return json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            if attempt == 9:
+                raise
+            time.sleep(0.02)
+
+
 def load_config():
     if CONFIG_PATH.exists():
-        config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+        config = _read_config_file()
     else:
         config = {"repos": []}
     config.setdefault("repos", [])
@@ -51,7 +66,19 @@ def load_config():
 
 
 def save_config(config):
-    CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    # Write then swap: a reader in the other process never sees a half-written
+    # (or empty) file. os.replace fails on Windows while a reader has the file
+    # open, hence the retries.
+    tmp = CONFIG_PATH.with_name(f"config.json.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(config, indent=2), encoding="utf-8")
+    for attempt in range(20):
+        try:
+            os.replace(tmp, CONFIG_PATH)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.02)
 
 
 def detect_default_ide(path: str) -> str:

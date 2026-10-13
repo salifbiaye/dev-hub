@@ -21,8 +21,6 @@ MASCOTS = [
     ("light", "Hubi clair"),
     ("graphite", "Hubi graphite"),
     ("auto", "Hubi auto (gris quand il dort)"),
-    ("owl", "Hibou"),
-    ("eyes", "Yeux seuls"),
 ]
 DEFAULT_MASCOT = "light"
 MARGIN = 16  # logical px from the top-right corner of the primary screen
@@ -58,6 +56,7 @@ _last_topmost = 0.0
 # stays up but black): reload the page.
 WATCHDOG_SILENCE = 8.0
 _last_poll = {"at": None}
+_applied = {"size": None}
 
 # poll() runs ~30x/s; the theme name comes from config.json, so it is re-read
 # at most once per THEME_REFRESH seconds.
@@ -197,10 +196,17 @@ def reset_position():
     platform_svc.overlay_set_rect(_window, x, y, pw, ph)
 
 
+def save_size(size_key):
+    """From another process (Dev Hub): the Hubi process resizes on its next poll."""
+    if size_key in SIZES:
+        _save(size=size_key)
+
+
 def set_size(size_key):
     if _window is None or size_key not in SIZES:
         return
     _save(size=size_key)
+    _applied["size"] = size_key
     r = platform_svc.overlay_rect(_window)
     pw, ph = _physical_size(size_key)
     if not r:
@@ -389,11 +395,18 @@ class HubiApi:
         with _lock:
             cmds = list(_cmds)
             _cmds.clear()
+        cfg = _cfg()
+        # Dev Hub's Hubi page only writes config.json: apply a new size here.
+        if _applied["size"] is None:
+            _applied["size"] = cfg["size"]
+        elif cfg["size"] != _applied["size"]:
+            _applied["size"] = cfg["size"]
+            set_size(cfg["size"])
         return {
             "cursor": cursor,
             "idle": platform_svc.idle_seconds(),
             "theme": _current_theme(),
-            "mascot": current_mascot(),
+            "mascot": cfg["mascot"],
             "cmds": cmds,
         }
 

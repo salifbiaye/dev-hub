@@ -122,6 +122,14 @@ def main_hubi():
     Its own process — see features/hubi/process.py."""
     if not hubi_process.claim_instance():
         return
+    if sys.platform == "win32":
+        # Hubi's beeps use WebAudio, which WebView2 keeps muted until the page
+        # is clicked (autoplay policy); Hubi is rarely clicked. Its WebView2 runs
+        # in private mode with its own browser process, so this only affects
+        # Hubi. Keeps pywebview's own argument (the variable replaces it).
+        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (
+            "--disable-features=ElasticOverscroll --autoplay-policy=no-user-gesture-required"
+        )
     try:
         port = serve_own_ui(_ui_dist_dir())
         hubi_api.start(f"http://localhost:{port}")
