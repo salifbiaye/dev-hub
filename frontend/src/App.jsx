@@ -4844,27 +4844,31 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     return saved >= TREE_MIN && saved <= TREE_MAX ? saved : 256
   })
 
-  // Drag the tree's right edge to widen it (long Java/TS file names).
-  function startTreeResize(e) {
+  // Drag the tree's right edge to widen it (long Java/TS file names). Pointer
+  // capture keeps the drag alive over the Aperçu iframe, which otherwise
+  // swallows the moves and the release and leaves the drag stuck.
+  const [resizingTree, setResizingTree] = useState(false)
+  const treeDragRef = useRef(null)
+  function onTreeHandleDown(e) {
+    if (e.button !== 0) return
     e.preventDefault()
-    const startX = e.clientX
-    const startW = treeWidth
-    let last = startW
-    function onMove(ev) {
-      last = Math.min(TREE_MAX, Math.max(TREE_MIN, startW + ev.clientX - startX))
-      setTreeWidth(last)
-    }
-    function onUp() {
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      localStorage.setItem('devhub.codeTreeWidth', String(Math.round(last)))
-    }
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
+    e.currentTarget.setPointerCapture(e.pointerId)
+    treeDragRef.current = { startX: e.clientX, startW: treeWidth, last: treeWidth }
+    setResizingTree(true)
+  }
+  function onTreeHandleMove(e) {
+    const drag = treeDragRef.current
+    if (!drag) return
+    drag.last = Math.min(TREE_MAX, Math.max(TREE_MIN, drag.startW + e.clientX - drag.startX))
+    setTreeWidth(drag.last)
+  }
+  function onTreeHandleUp(e) {
+    const drag = treeDragRef.current
+    if (!drag) return
+    treeDragRef.current = null
+    setResizingTree(false)
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    localStorage.setItem('devhub.codeTreeWidth', String(Math.round(drag.last)))
   }
 
   useEffect(() => {
@@ -4940,14 +4944,19 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     >
       <div className="relative flex shrink-0 flex-col overflow-hidden border-r border-border" style={{ width: treeWidth }}>
         <div
-          onMouseDown={startTreeResize}
+          onPointerDown={onTreeHandleDown}
+          onPointerMove={onTreeHandleMove}
+          onPointerUp={onTreeHandleUp}
+          onPointerCancel={onTreeHandleUp}
           onDoubleClick={() => {
             setTreeWidth(256)
             localStorage.setItem('devhub.codeTreeWidth', '256')
           }}
-          title="Glisser pour élargir · double-clic pour la taille par défaut"
-          className="no-drag absolute top-0 right-0 bottom-0 z-10 w-1.5 cursor-col-resize transition-colors hover:bg-accent/40"
+          className={`no-drag absolute top-0 right-0 bottom-0 z-10 w-1.5 cursor-col-resize touch-none transition-colors ${
+            resizingTree ? 'bg-accent/60' : 'hover:bg-accent/30'
+          }`}
         />
+        {resizingTree && <div className="fixed inset-0 z-50 cursor-col-resize" />}
         <button
           onClick={() => setQuickOpen(true)}
           className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-border px-2 py-1.5 text-left text-[11px] text-muted hover:bg-surface-hover hover:text-text"
