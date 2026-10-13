@@ -136,7 +136,9 @@ def main_hubi():
         # in private mode with its own browser process, so this only affects
         # Hubi. Keeps pywebview's own argument (the variable replaces it).
         os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (
-            "--disable-features=ElasticOverscroll --autoplay-policy=no-user-gesture-required"
+            "--disable-features=ElasticOverscroll,CalculateNativeWinOcclusion"
+            " --disable-backgrounding-occluded-windows"
+            " --autoplay-policy=no-user-gesture-required"
         )
     try:
         port = serve_own_ui(_ui_dist_dir())

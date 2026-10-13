@@ -110,7 +110,10 @@
   // ------------------------------------------------------------ boucle de rendu
 
   let lastFrame = performance.now()
+  let frames = 0 // images dessinées : Python recharge la page si ça n'avance plus
+
   function frame(now) {
+    frames++
     const dt = (now - lastFrame) / 1000
     lastFrame = now
 
@@ -217,7 +220,7 @@
     if (!a) return
     const started = performance.now()
     try {
-      const res = await a.poll()
+      const res = await a.poll(frames)
       if (res) {
         idle = res.idle == null ? 0 : res.idle
         cursor = res.cursor ? { x: res.cursor[0], y: res.cursor[1] } : null

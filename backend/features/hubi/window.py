@@ -56,6 +56,11 @@ _last_topmost = 0.0
 # stays up but black): reload the page.
 WATCHDOG_SILENCE = 8.0
 _last_poll = {"at": None}
+# The page can keep polling while drawing nothing (Chromium decided the window
+# was hidden, or its GPU side failed): the window then shows black. The page
+# reports how many frames it drew; frames stuck while visible = reload.
+FRAME_STALL = 6.0
+_frames = {"count": None, "at": None}
 _applied = {"size": None}
 
 # poll() runs ~30x/s; the theme name comes from config.json, so it is re-read
@@ -147,6 +152,13 @@ def sound_enabled():
 
 def set_sound(value):
     _save(sound=bool(value))
+
+
+_reload_listeners = []
+
+
+def on_page_reload(callback):
+    _reload_listeners.append(callback)
 
 
 def on_mood_change(callback):
@@ -259,8 +271,11 @@ def _watchdog():
         # A hidden page has its timers throttled by Chromium: silence is normal.
         if not _cfg()["visible"]:
             _last_poll["at"] = time.monotonic()
+            _frames["count"], _frames["at"] = None, None
             continue
-        if time.monotonic() - _last_poll["at"] > WATCHDOG_SILENCE:
+        stalled = _frames["at"] is not None and time.monotonic() - _frames["at"] > FRAME_STALL
+        if stalled or time.monotonic() - _last_poll["at"] > WATCHDOG_SILENCE:
+            _frames["count"], _frames["at"] = None, None
             _last_poll["at"] = time.monotonic()  # give the reload time to come up
             try:
                 # A fresh query string: setting WebView2's Source to the URL it
@@ -268,6 +283,12 @@ def _watchdog():
                 win.load_url(f"{_base_url}/hubi.html?r={int(time.time())}")
             except Exception:
                 pass
+            # The fresh page knows nothing: resend badges, bubble and mood.
+            for callback in list(_reload_listeners):
+                try:
+                    callback()
+                except Exception:
+                    pass
 
 
 def _on_closed():
@@ -390,13 +411,15 @@ class HubiApi:
     """The js_api object for the widget page. Public methods only: pywebview
     exposes every public attribute, so no state lives on the instance."""
 
-    def poll(self):
+    def poll(self, frames=None):
         global _last_topmost
         win = _window
         if win is None:
             return None
         now = time.monotonic()
         _last_poll["at"] = now
+        if frames is not None and frames != _frames["count"]:
+            _frames["count"], _frames["at"] = frames, now
         if now - _last_topmost > TOPMOST_EVERY:
             _last_topmost = now
             platform_svc.overlay_keep_on_top(win)

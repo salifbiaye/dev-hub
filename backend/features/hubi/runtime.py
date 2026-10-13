@@ -1,5 +1,8 @@
 """Hubi process services besides the eyes window: the control server, the
 timer watcher, the tasks count and the quick-add hotkey."""
+import threading
+import time
+
 from . import codex_watch, quick_add, reactions, server, tasks, timer, tray, window
 
 
@@ -47,7 +50,16 @@ ROUTES = {
 }
 
 
+def _republish_all():
+    # Give the reloaded page a moment to start polling before queueing.
+    time.sleep(1.5)
+    reactions.republish()
+    tasks_changed()
+    timer._push_state(timer.state())
+
+
 def start(base_url):
+    window.on_page_reload(lambda: threading.Thread(target=_republish_all, daemon=True).start())
     server.start(ROUTES)
     timer.start_watcher()
     tasks_changed()

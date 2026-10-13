@@ -108,6 +108,13 @@ def _publish(transient_mood=None):
         window.send_mood(transient_mood, None)
 
 
+def republish():
+    """Resend the whole state (after Hubi's page was reloaded)."""
+    with _lock:
+        _shown.update({"base": None, "sticky": None, "counts": None})
+    _publish()
+
+
 def handle_event(kind, project=None, message=None, session=None, tool="claude"):
     project = _clean(project, 80)
     message = _clean(message)
