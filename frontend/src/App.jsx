@@ -4291,7 +4291,7 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
         }`}
       >
         <IconFile className="h-3.5 w-3.5 shrink-0" />
-        <span className="min-w-0 flex-1 truncate font-mono">{node.name}</span>
+        <span className="min-w-0 flex-1 truncate font-mono" title={node.path}>{node.name}</span>
         {node.status && (
           <span
             className={`shrink-0 font-mono text-[10px] font-semibold ${
@@ -4322,7 +4322,7 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
       >
         <IconChevronDown className={`h-3 w-3 shrink-0 transition-transform duration-150 ${isOpen ? '' : '-rotate-90'}`} />
         <IconFolder className="h-3.5 w-3.5 shrink-0 text-accent" />
-        <span className="min-w-0 flex-1 truncate font-medium">{node.name}</span>
+        <span className="min-w-0 flex-1 truncate font-medium" title={node.path}>{node.name}</span>
         {node.hasChanges && (
           <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-warning" title="Contient des fichiers modifiés/nouveaux" />
         )}
@@ -4352,7 +4352,13 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
   )
 }
 
-function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasChanges }) {
+// The editor's textarea always yields LF; comparing it with a CRLF file
+// read back from disk made a freshly saved file look modified.
+function toLf(text) {
+  return text.replace(/\r\n/g, '\n')
+}
+
+function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasChanges, onSaved }) {
   const [content, setContent] = useState(null)
   const [diffRows, setDiffRows] = useState(null)
   const [meta, setMeta] = useState(null)
@@ -4371,6 +4377,8 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   const [raw, setRaw] = useState(null)
   const [draft, setDraft] = useState(() => draftStore.get(draftKey) ?? null)
   const [saving, setSaving] = useState(false)
+  const [savedAt, setSavedAt] = useState(0)
+  const [pendingMode, setPendingMode] = useState(null) // mode waiting for « abandonner ? »
   const [reloadKey, setReloadKey] = useState(0)
   const dirty = draft != null && raw != null && draft !== raw
 
@@ -4388,7 +4396,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
       .read_file_content(repo.path, file)
       .then((r) => {
         if (!alive) return
-        if (r?.content != null) setRaw(r.content)
+        if (r?.content != null) setRaw(toLf(r.content))
         else {
           onNotify(r?.error || 'Fichier non modifiable ici', true)
           setMode('code')
@@ -4404,8 +4412,12 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
     if (mode === 'edit' && raw != null && draft == null) setDraft(raw)
   }, [mode, raw, draft])
 
-  function switchMode(next) {
-    if (mode === 'edit' && next !== 'edit' && dirty && !window.confirm('Abandonner les modifications non enregistrées ?')) return
+  function switchMode(next, confirmed = false) {
+    if (mode === 'edit' && next !== 'edit' && dirty && !confirmed) {
+      setPendingMode(next)
+      return
+    }
+    setPendingMode(null)
     if (mode === 'edit' && next !== 'edit') {
       setDraft(null)
       draftStore.clear(draftKey)
@@ -4425,8 +4437,17 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
     setRaw(draft)
     draftStore.clear(draftKey)
     setReloadKey((k) => k + 1)
-    onNotify('Fichier enregistré')
+    setSavedAt(Date.now())
+    // The file is now modified in git: let the tab re-read the status so the
+    // Code view shows the diff and the tree marks the file.
+    onSaved?.()
   }
+
+  useEffect(() => {
+    if (!savedAt) return
+    const id = setTimeout(() => setSavedAt(0), 2200)
+    return () => clearTimeout(id)
+  }, [savedAt])
 
   const highlight = useCallback((line) => highlightLine(line, prismLangForFile(file)), [file])
 
@@ -4470,7 +4491,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
           if (!alive) return
           if (r?.content != null) {
             setContent(r.content)
-            setRaw(r.content)
+            setRaw(toLf(r.content))
             setMeta(null)
           } else {
             setContent(null)
@@ -4522,6 +4543,12 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">
           {file}
           {dirty && <span className="ml-1.5 text-warning" title="Modifications non enregistrées">●</span>}
+          {!dirty && savedAt > 0 && (
+            <span className="ml-2 inline-flex items-center gap-1 font-sans text-[11px] text-success">
+              <IconCheck className="h-3 w-3" />
+              Enregistré
+            </span>
+          )}
         </span>
         {(rows.length > 0 || mode !== 'code') && (
           <div className="flex shrink-0 items-center rounded-md border border-border bg-base p-0.5">
@@ -4621,6 +4648,15 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
         </button>
       </div>
 
+      {pendingMode && (
+        <ConfirmModal
+          title="Modifications non enregistrées"
+          message={`Tes changements dans ${file.split('/').pop()} seront perdus. Enregistre-les d'abord avec Ctrl+S si tu veux les garder.`}
+          confirmLabel="Abandonner"
+          onConfirm={() => switchMode(pendingMode, true)}
+          onCancel={() => setPendingMode(null)}
+        />
+      )}
       {mode === 'edit' ? (
         draft == null ? (
           <p className="p-3 text-xs text-muted">Chargement…</p>
@@ -4792,7 +4828,10 @@ function QuickOpenModal({ files, onSelect, onClose }) {
   )
 }
 
-function CodeBrowserPanel({ repo, status, onNotify, refreshSignal }) {
+const TREE_MIN = 160
+const TREE_MAX = 600
+
+function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }) {
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState(() => new Set())
@@ -4800,6 +4839,33 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal }) {
   const [fullscreen, setFullscreen] = useState(false)
   const [quickOpen, setQuickOpen] = useState(false)
   const [fileRefreshKey, setFileRefreshKey] = useState(0)
+  const [treeWidth, setTreeWidth] = useState(() => {
+    const saved = Number(localStorage.getItem('devhub.codeTreeWidth'))
+    return saved >= TREE_MIN && saved <= TREE_MAX ? saved : 256
+  })
+
+  // Drag the tree's right edge to widen it (long Java/TS file names).
+  function startTreeResize(e) {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = treeWidth
+    let last = startW
+    function onMove(ev) {
+      last = Math.min(TREE_MAX, Math.max(TREE_MIN, startW + ev.clientX - startX))
+      setTreeWidth(last)
+    }
+    function onUp() {
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      localStorage.setItem('devhub.codeTreeWidth', String(Math.round(last)))
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
 
   useEffect(() => {
     let alive = true
@@ -4872,7 +4938,16 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal }) {
           : 'flex h-[75vh] overflow-hidden rounded-lg border border-border bg-surface'
       }
     >
-      <div className="flex w-64 shrink-0 flex-col overflow-hidden border-r border-border">
+      <div className="relative flex shrink-0 flex-col overflow-hidden border-r border-border" style={{ width: treeWidth }}>
+        <div
+          onMouseDown={startTreeResize}
+          onDoubleClick={() => {
+            setTreeWidth(256)
+            localStorage.setItem('devhub.codeTreeWidth', '256')
+          }}
+          title="Glisser pour élargir · double-clic pour la taille par défaut"
+          className="no-drag absolute top-0 right-0 bottom-0 z-10 w-1.5 cursor-col-resize transition-colors hover:bg-accent/40"
+        />
         <button
           onClick={() => setQuickOpen(true)}
           className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-border px-2 py-1.5 text-left text-[11px] text-muted hover:bg-surface-hover hover:text-text"
@@ -4905,6 +4980,7 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal }) {
           file={selectedPath}
           onNotify={onNotify}
           hasChanges={!!statusMap[selectedPath]}
+          onSaved={onFileSaved}
           fullscreen={fullscreen}
           onToggleFullscreen={() => setFullscreen((v) => !v)}
         />
@@ -5437,7 +5513,13 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
 
       {visitedTabs.has('code') && (
         <div className={activeTab === 'code' ? '' : 'hidden'}>
-          <CodeBrowserPanel repo={repo} status={status} onNotify={onNotify} refreshSignal={refreshSignal} />
+          <CodeBrowserPanel
+            repo={repo}
+            status={status}
+            onNotify={onNotify}
+            refreshSignal={refreshSignal}
+            onFileSaved={() => api()?.git_status(repo.path)?.then((s) => s && setStatus(s))}
+          />
         </div>
       )}
 
