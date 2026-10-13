@@ -34,6 +34,7 @@
   let bubbleAlpha = 0
   let timer = null // { end, label } (end en ms epoch)
   let openTasks = 0
+  let sessions = {} // sessions IA en cours par outil : { claude: 2, codex: 1 }
 
   function api() {
     return window.pywebview && window.pywebview.api ? window.pywebview.api : null
@@ -164,6 +165,7 @@
     if (openTasks > 0) {
       HubiHud.drawBadge(ctx, String(openTasks), true, accent, 'check')
     }
+    HubiHud.drawSessions(ctx, sessions, timer ? 44 : 6)
   }
 
   function bubbleVisible() {
@@ -186,6 +188,9 @@
         break
       case 'tasks':
         openTasks = cmd[1] || 0
+        break
+      case 'sessions':
+        sessions = cmd[1] || {}
         break
       case 'beep':
         HubiHud.beep(cmd[1])

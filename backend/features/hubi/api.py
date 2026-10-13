@@ -1,7 +1,9 @@
 """Dev Hub's side of Hubi: lets the main UI read/toggle the widget."""
 import webview
 
-from . import tray, window
+from app_config import load_config, save_config
+
+from . import codex_watch, tray, window
 
 
 def quit_all():
@@ -31,6 +33,14 @@ def stop():
     window.destroy()
 
 
+def _agent_state(claude_hooks):
+    from features.terminal.sessions import CLI_LABELS, cli_kind
+
+    kind = cli_kind()
+    on = {"claude": claude_hooks, "codex": codex_watch.notify_flag()}.get(kind, False)
+    return {"agent": kind, "agent_label": CLI_LABELS[kind] if kind != "other" else None, "agent_notify": bool(on)}
+
+
 class HubiMixin:
     """Dev Hub's controls for Hubi, which runs as its own process
     (features/hubi/process.py) — start/stop it, desktop shortcut, autostart."""
@@ -56,7 +66,23 @@ class HubiMixin:
             "sizes": list(window.SIZES),
             "follow_theme": window.follows_theme(),
             "sound": window.sound_enabled(),
+            "codex_installed": codex_watch.ROOT.exists(),
+            "codex_notify": codex_watch.notify_flag(),
+            # The agent chosen in Paramètres IA, and whether Hubi follows it.
+            **_agent_state(hooks),
         }
+
+    def hubi_set_agent_notify(self, enabled):
+        """One switch for « the AI agent »: Claude Code hooks or the Codex
+        session watcher, depending on the CLI chosen in Paramètres IA."""
+        from features.terminal.sessions import cli_kind
+
+        kind = cli_kind()
+        if kind == "claude":
+            return self.hubi_set_claude_hooks(enabled)
+        if kind == "codex":
+            return self.hubi_set_option("codex_notify", enabled)
+        return {"error": "Choisis Claude Code ou Codex dans Paramètres IA", **self.hubi_get_state()}
 
     def hubi_test_sound(self):
         from . import client, process
@@ -78,6 +104,10 @@ class HubiMixin:
             window.set_follow_theme(bool(value))
         elif key == "sound":
             window.set_sound(bool(value))
+        elif key == "codex_notify":
+            config = load_config()
+            config.setdefault("hubi", {})["codex_notify"] = bool(value)
+            save_config(config)
         else:
             return {"error": "Réglage inconnu", **self.hubi_get_state()}
         return {"ok": True, **self.hubi_get_state()}

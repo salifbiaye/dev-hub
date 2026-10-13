@@ -227,6 +227,12 @@ def configure(base_url):
 
 def _on_shown():
     platform_svc.overlay_prepare(_window)
+    try:
+        from . import process
+
+        platform_svc.apply_window_icon(_window, str(process._hubi_icon_path()))
+    except Exception:
+        pass
     _apply_geometry()
     if not _cfg()["visible"]:
         platform_svc.overlay_set_visible(_window, False)

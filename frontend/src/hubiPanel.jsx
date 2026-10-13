@@ -250,13 +250,20 @@ export function HubiPage({ hubi, onState, onClose, onNotify, onOpenTasks, onOpen
 
         <div className="flex flex-col gap-6">
           <Section title="Intégration">
-            <Row title="Notifications de Claude Code" hint="Hubi réagit quand une session Claude attend une réponse, termine ou échoue (nouvelles sessions).">
+            <Row
+              title={`Notifications de l'agent IA${hubi.agent_label ? ` (${hubi.agent_label})` : ''}`}
+              hint={
+                hubi.agent_label
+                  ? `Hubi suit tes sessions ${hubi.agent_label} : en cours (avec leur nombre), en attente de réponse, terminées ou en erreur. Il suit l'agent choisi dans Paramètres IA.`
+                  : 'Choisis Claude Code ou Codex dans Paramètres IA pour que Hubi suive tes sessions.'
+              }
+            >
               <Switch
-                checked={!!hubi.claude_hooks}
-                disabled={busy === 'claude_hooks'}
+                checked={!!hubi.agent_notify}
+                disabled={busy === 'agent_notify' || !hubi.agent_label}
                 onChange={(v) =>
-                  call('claude_hooks', () => api()?.hubi_set_claude_hooks?.(v), (r) =>
-                    r.claude_hooks ? 'Hubi sera notifié par Claude Code (nouvelles sessions)' : 'Hooks Claude Code de Hubi retirés',
+                  call('agent_notify', () => api()?.hubi_set_agent_notify?.(v), (r) =>
+                    r.agent_notify ? `Hubi suit tes sessions ${r.agent_label}` : `Hubi ne suit plus tes sessions ${r.agent_label}`,
                   )
                 }
               />

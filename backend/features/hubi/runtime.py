@@ -1,6 +1,6 @@
 """Hubi process services besides the eyes window: the control server, the
 timer watcher, the tasks count and the quick-add hotkey."""
-from . import quick_add, reactions, server, tasks, timer, tray, window
+from . import codex_watch, quick_add, reactions, server, tasks, timer, tray, window
 
 
 def tasks_changed():
@@ -52,8 +52,10 @@ def start(base_url):
     timer.start_watcher()
     tasks_changed()
     quick_add.start(base_url, tasks_changed)
+    codex_watch.start()
 
 
 def stop():
+    codex_watch.stop()
     quick_add.stop()
     server.stop()

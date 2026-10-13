@@ -123,6 +123,14 @@ def main_hubi():
     if not hubi_process.claim_instance():
         return
     if sys.platform == "win32":
+        # Its own taskbar identity: otherwise Windows groups Hubi's window
+        # under DevHub.exe and shows Dev Hub's icon for it.
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SalifBiaye.DevHub.Hubi")
+        except Exception:
+            pass
         # Hubi's beeps use WebAudio, which WebView2 keeps muted until the page
         # is clicked (autoplay policy); Hubi is rarely clicked. Its WebView2 runs
         # in private mode with its own browser process, so this only affects

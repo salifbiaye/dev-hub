@@ -107,6 +107,43 @@
     ctx.restore()
   }
 
+  // Sessions en cours par outil : « ● 2 Claude · ● 1 Codex », en haut à gauche
+  // (sous le minuteur s'il y en a un).
+  const TOOL_STYLE = {
+    claude: { color: [217, 119, 87], label: 'Claude' },
+    codex: { color: [180, 190, 200], label: 'Codex' },
+  }
+
+  function drawSessions(ctx, counts, y) {
+    const parts = Object.keys(TOOL_STYLE)
+      .filter((tool) => counts[tool] > 0)
+      .map((tool) => ({ text: counts[tool] + ' ' + TOOL_STYLE[tool].label, color: TOOL_STYLE[tool].color }))
+    if (!parts.length) return
+    ctx.save()
+    ctx.font = BADGE_FONT
+    const DOT = 14
+    const GAP = 16
+    const widths = parts.map((p) => ctx.measureText(p.text).width)
+    const w = 20 + widths.reduce((a, b) => a + b, 0) + parts.length * DOT + (parts.length - 1) * GAP
+    const h = 32
+    const x = 6
+    roundRect(ctx, x, y, w, h, 10)
+    ctx.fillStyle = 'rgba(255,255,255,0.10)'
+    ctx.fill()
+    ctx.textAlign = 'left'
+    ctx.textBaseline = 'middle'
+    let cx = x + 10
+    parts.forEach((p, i) => {
+      ctx.fillStyle = rgba(p.color, 1)
+      ctx.beginPath()
+      ctx.arc(cx + 4, y + h / 2, 4.5, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.fillText(p.text, cx + DOT, y + h / 2 + 1)
+      cx += DOT + widths[i] + GAP
+    })
+    ctx.restore()
+  }
+
   function formatRemaining(ms) {
     const total = Math.max(0, Math.ceil(ms / 1000))
     const h = Math.floor(total / 3600)
@@ -161,5 +198,5 @@
     if (audio && audio.state === 'suspended') audio.resume()
   }
 
-  global.HubiHud = { drawBubble, drawBadge, formatRemaining, beep, unlockAudio, TONES }
+  global.HubiHud = { drawBubble, drawBadge, drawSessions, formatRemaining, beep, unlockAudio, TONES }
 })(window)

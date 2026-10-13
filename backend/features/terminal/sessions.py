@@ -87,6 +87,89 @@ def stream_terminal(terminal_id, proc):
         pass
 
 
+def cli_binary():
+    """The interactive CLI from Paramètres IA (bare binary, flags dropped)."""
+    cli_command = (load_config().get("ai", {}).get("cli_command") or "").strip()
+    if not cli_command:
+        return None
+    try:
+        return shlex.split(cli_command, posix=False)[0].strip('"')
+    except (ValueError, IndexError):
+        return None
+
+
+def cli_kind(binary=None):
+    """'claude', 'codex' or 'other': which session store / resume syntax applies."""
+    name = Path(binary or cli_binary() or "").stem.lower()
+    return name if name in ("claude", "codex") else "other"
+
+
+CLI_LABELS = {"claude": "Claude", "codex": "Codex", "other": "l'IA"}
+
+# rollout file -> (mtime, cwd, id, title): a project's list re-reads only
+# sessions that changed since last time.
+_codex_cache = {}
+
+
+def _codex_title(text):
+    text = " ".join((text or "").strip().split())
+    # Codex injects context blocks (<environment_context>…) as user messages.
+    if len(text) < 2 or text.startswith("<"):
+        return None
+    return text[:80]
+
+
+def _codex_meta(f):
+    mtime = f.stat().st_mtime
+    cached = _codex_cache.get(f)
+    if cached and cached[0] == mtime:
+        return cached[1:]
+    cwd = sid = title = None
+    try:
+        with f.open("r", encoding="utf-8", errors="replace") as fh:
+            for i, line in enumerate(fh):
+                if i >= 200 or (cwd and title):
+                    break
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                payload = obj.get("payload") or {}
+                if obj.get("type") == "session_meta":
+                    cwd, sid = payload.get("cwd"), payload.get("id")
+                elif obj.get("type") == "response_item" and payload.get("role") == "user" and not title:
+                    for block in payload.get("content") or []:
+                        if isinstance(block, dict) and block.get("type") == "input_text":
+                            title = _codex_title(block.get("text"))
+                            if title:
+                                break
+    except OSError:
+        pass
+    _codex_cache[f] = (mtime, cwd, sid, title)
+    return cwd, sid, title
+
+
+def _norm(path):
+    try:
+        return os.path.normcase(str(Path(path).resolve()))
+    except OSError:
+        return os.path.normcase(str(path))
+
+
+def list_codex_sessions(path):
+    root = Path.home() / ".codex" / "sessions"
+    if not root.exists():
+        return []
+    target = _norm(path)
+    sessions = []
+    for f in root.rglob("rollout-*.jsonl"):
+        cwd, sid, title = _codex_meta(f)
+        if cwd and sid and _norm(cwd) == target:
+            sessions.append({"id": sid, "title": title or "Session sans titre", "modified": f.stat().st_mtime})
+    sessions.sort(key=lambda s: s["modified"], reverse=True)
+    return sessions
+
+
 def _claude_project_dir(path):
     normalized = str(Path(path).resolve())
     encoded = re.sub(r"[\\/:]", "-", normalized)
@@ -94,7 +177,16 @@ def _claude_project_dir(path):
 
 
 class TerminalMixin:
+    def get_ai_cli(self):
+        """Which CLI the IA tab drives, so the UI can say Claude or Codex."""
+        kind = cli_kind()
+        return {"kind": kind, "label": CLI_LABELS[kind], "configured": cli_binary() is not None}
+
     def list_claude_sessions(self, path):
+        # Name kept for the existing callers: lists the sessions of whichever
+        # CLI is configured (Claude Code or Codex).
+        if cli_kind() == "codex":
+            return list_codex_sessions(path)
         project_dir = _claude_project_dir(path)
         if not project_dir.exists():
             return []
@@ -140,24 +232,19 @@ class TerminalMixin:
         return sessions
 
     def start_terminal(self, path, session_id=None, prompt=None):
-        ai = load_config().get("ai", {})
-        cli_command = (ai.get("cli_command") or "").strip()
-        if not cli_command:
-            return {"error": "Commande CLI non configurée (voir Paramètres IA)"}
-
         # cli_command is tuned for the one-shot commit-message call (e.g. "claude -p")
         # and its flags (-p/exec/...) are incompatible with an interactive session —
         # only the bare binary should be launched here.
-        try:
-            binary = shlex.split(cli_command, posix=False)[0]
-        except (ValueError, IndexError):
-            return {"error": "Commande CLI invalide"}
+        binary = cli_binary()
+        if not binary:
+            return {"error": "Commande CLI non configurée ou invalide (voir Paramètres IA)"}
 
         argv = [binary]
         if session_id:
-            argv += ["--resume", session_id]
-        # A Hubi task launched "with Claude": sent as the session's first
-        # message (claude [--resume id] "<prompt>" starts interactively with it).
+            # claude --resume <id> / codex resume <id>
+            argv += ["resume", session_id] if cli_kind(binary) == "codex" else ["--resume", session_id]
+        # A Hubi task: sent as the session's first message — both CLIs take
+        # a trailing prompt ([--resume id | resume id] "<prompt>").
         prompt = " ".join(str(prompt or "").split())
         if prompt:
             argv.append(prompt)

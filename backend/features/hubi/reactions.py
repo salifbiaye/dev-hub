@@ -17,7 +17,7 @@ MAX_TEXT = 300
 SESSION_TTL = 6 * 3600  # a session silent for this long is considered gone
 
 _lock = threading.Lock()
-_sessions = {}  # key -> {"state": "working"|"waiting", "project", "message", "at"}
+_sessions = {}  # key -> {"state": "working"|"waiting", "tool": "claude"|"codex", "project", "message", "at"}
 _ringing = None  # label of a finished timer not yet acknowledged
 _shown = {"base": None, "sticky": None}
 
@@ -80,14 +80,26 @@ def _compute():
     return base, sticky
 
 
+def _counts():
+    """Sessions running right now (working or waiting), per tool."""
+    counts = {}
+    for s in _sessions.values():
+        counts[s.get("tool", "claude")] = counts.get(s.get("tool", "claude"), 0) + 1
+    return counts
+
+
 def _publish(transient_mood=None):
     """Push the persistent state if it changed, then the transient mood (the
     page drops any running overlay when its base mood changes)."""
     with _lock:
         base, sticky = _compute()
+        counts = _counts()
         base_changed = base != _shown["base"]
         sticky_changed = sticky != _shown["sticky"]
-        _shown["base"], _shown["sticky"] = base, sticky
+        counts_changed = counts != _shown.get("counts")
+        _shown["base"], _shown["sticky"], _shown["counts"] = base, sticky, counts
+    if counts_changed:
+        window.push_cmd("sessions", counts)
     if sticky_changed:
         window.push_cmd("sticky", _clean(sticky[0]) if sticky else None, sticky[1] if sticky else None)
     if base_changed:
@@ -96,17 +108,18 @@ def _publish(transient_mood=None):
         window.send_mood(transient_mood, None)
 
 
-def handle_event(kind, project=None, message=None, session=None):
+def handle_event(kind, project=None, message=None, session=None, tool="claude"):
     project = _clean(project, 80)
     message = _clean(message)
     key = session or f"p:{project}"
     transient = None
     with _lock:
         if kind == "claude_working":
-            _sessions[key] = {"state": "working", "project": project, "message": "", "at": time.time()}
+            _sessions[key] = {"state": "working", "tool": tool, "project": project, "message": "", "at": time.time()}
         elif kind == "claude_waiting":
             _sessions[key] = {
                 "state": "waiting",
+                "tool": tool,
                 "project": project,
                 "message": message or "Claude attend ta réponse",
                 "at": time.time(),

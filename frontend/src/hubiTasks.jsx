@@ -15,7 +15,7 @@ function timeAgo(seconds) {
   return new Date(seconds * 1000).toLocaleDateString()
 }
 
-function SessionPicker({ project, onPick, onClose }) {
+function SessionPicker({ project, cliLabel, onPick, onClose }) {
   const [sessions, setSessions] = useState(null)
   useEffect(() => {
     api()
@@ -25,7 +25,7 @@ function SessionPicker({ project, onPick, onClose }) {
   return (
     <div className="mt-2 overflow-hidden rounded-lg border border-border bg-base">
       <div className="flex items-center justify-between border-b border-border px-3 py-1.5">
-        <span className="text-[10.5px] font-medium uppercase tracking-wider text-muted">Sessions Claude du projet</span>
+        <span className="text-[10.5px] font-medium uppercase tracking-wider text-muted">Sessions {cliLabel} du projet</span>
         <button onClick={onClose} className="cursor-pointer text-muted hover:text-text" title="Fermer">
           <IconClose className="h-3 w-3" />
         </button>
@@ -47,7 +47,7 @@ function SessionPicker({ project, onPick, onClose }) {
   )
 }
 
-function TaskRow({ task, showProject, projectName, repos, onToggle, onDelete, onSetProject, onLaunch }) {
+function TaskRow({ task, cliLabel, showProject, projectName, repos, onToggle, onDelete, onSetProject, onLaunch }) {
   const [picking, setPicking] = useState(false)
   const done = !!task.done
   return (
@@ -102,11 +102,11 @@ function TaskRow({ task, showProject, projectName, repos, onToggle, onDelete, on
               <span className="ml-auto flex items-center gap-1">
                 <button
                   onClick={() => onLaunch(task, null)}
-                  title="Nouvelle session Claude qui exécute cette tâche"
+                  title={`Nouvelle session ${cliLabel} qui exécute cette tâche`}
                   className="flex cursor-pointer items-center gap-1 whitespace-nowrap rounded-md bg-accent px-2 py-0.5 text-[11px] font-medium text-white shadow-sm transition-opacity hover:opacity-90"
                 >
                   <IconPlay className="h-2.5 w-2.5" />
-                  Lancer avec Claude
+                  Lancer avec {cliLabel}
                 </button>
                 <button
                   onClick={() => setPicking((v) => !v)}
@@ -133,6 +133,7 @@ function TaskRow({ task, showProject, projectName, repos, onToggle, onDelete, on
       {picking && (
         <SessionPicker
           project={task.project}
+          cliLabel={cliLabel}
           onPick={(id) => {
             setPicking(false)
             onLaunch(task, id)
@@ -153,12 +154,17 @@ export function HubiTasksModal({ repos, onClose, onNotify, onLaunch }) {
   const [scope, setScope] = useState(ALL)
   const [filter, setFilter] = useState('todo')
   const [target, setTarget] = useState('')
+  // Tasks run in the CLI chosen in Paramètres IA (Claude Code or Codex).
+  const [cliLabel, setCliLabel] = useState('Claude')
   const inputRef = useRef(null)
 
   useEffect(() => {
     api()
       ?.hubi_tasks_list?.()
       ?.then((r) => setTasks(r?.tasks || []))
+    api()
+      ?.get_ai_cli?.()
+      ?.then((r) => r?.label && setCliLabel(r.label))
   }, [])
 
   useEffect(() => {
@@ -369,6 +375,7 @@ export function HubiTasksModal({ repos, onClose, onNotify, onLaunch }) {
                   <TaskRow
                     key={t.id}
                     task={t}
+                    cliLabel={cliLabel}
                     showProject={scope === ALL}
                     projectName={projectName}
                     repos={repos}

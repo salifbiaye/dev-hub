@@ -1488,7 +1488,7 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
           Liste des sessions non disponible pour ce CLI — clique sur "Nouvelle session" pour l'ouvrir ici.
         </p>
       ) : sessions.length === 0 ? (
-        <EmptyState message="Aucune session Claude Code trouvée pour ce repo." size="sm" />
+        <EmptyState message={`Aucune session ${aiSettings?.provider === 'codex' ? 'Codex' : 'Claude Code'} trouvée pour ce repo.`} size="sm" />
       ) : (
         <>
           <input
@@ -6037,6 +6037,10 @@ function ProcessesPanel({
   )
 }
 
+// Providers that run a real agent (IA tab sessions, Hubi tasks and
+// notifications); the others only write commit messages.
+const AGENT_PROVIDER_IDS = ['claude-code', 'codex']
+
 const AI_PROVIDERS = [
   { id: 'openai', label: 'OpenAI', kind: 'api', defaultBaseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o-mini' },
   { id: 'deepseek', label: 'DeepSeek', kind: 'api', defaultBaseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-chat' },
@@ -6553,27 +6557,48 @@ function AiSettingsModal({ onClose, onNotify }) {
           <div className="flex flex-col gap-3">
             <div>
               <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Provider</label>
-              <div className="flex flex-wrap gap-1.5">
-                {AI_PROVIDERS.filter((p) => {
+              {[
+                {
+                  title: 'Agents IA',
+                  hint: "Messages de commit, sessions dans l'onglet IA, tâches lancées depuis Hubi, notifications de Hubi.",
+                  ids: AGENT_PROVIDER_IDS,
+                },
+                {
+                  title: 'Messages de commit uniquement',
+                  hint: 'Ces providers génèrent les messages de commit, sans sessions ni suivi par Hubi.',
+                  ids: AI_PROVIDERS.map((p) => p.id).filter((id) => !AGENT_PROVIDER_IDS.includes(id)),
+                },
+              ].map((group) => {
+                const items = AI_PROVIDERS.filter((p) => group.ids.includes(p.id)).filter((p) => {
                   // Only offer CLI providers actually installed on this machine —
                   // but never hide the one already configured, even if it went missing.
                   if (p.id === 'claude-code') return cliTools.claude || provider === 'claude-code'
                   if (p.id === 'codex') return cliTools.codex || provider === 'codex'
                   return true
-                }).map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => selectProvider(p.id)}
-                    className={`cursor-pointer rounded-md border px-2.5 py-1 text-[12px] transition-colors duration-150 ${
-                      provider === p.id
-                        ? 'border-accent bg-accent-bg text-accent'
-                        : 'border-border text-muted hover:text-text hover:border-border-strong'
-                    }`}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
+                })
+                if (!items.length) return null
+                return (
+                  <div key={group.title} className="mb-2.5">
+                    <p className="text-[11.5px] font-medium text-text">{group.title}</p>
+                    <p className="mb-1.5 text-[10.5px] text-muted">{group.hint}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {items.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => selectProvider(p.id)}
+                          className={`cursor-pointer rounded-md border px-2.5 py-1 text-[12px] transition-colors duration-150 ${
+                            provider === p.id
+                              ? 'border-accent bg-accent-bg text-accent'
+                              : 'border-border text-muted hover:text-text hover:border-border-strong'
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
 
             {isCli ? (
