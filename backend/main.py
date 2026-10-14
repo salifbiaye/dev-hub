@@ -36,7 +36,17 @@ else:
 # explicitly -- the browser window's tab-content controls do, so they need
 # the same bypass folded into that explicit string themselves, or they'd
 # silently lose this protection even though the env var is set.
-_PROXY_BYPASS_ARG = "--proxy-bypass-list=localhost;127.0.0.1;<local>"
+#
+# Chromium's native occlusion tracking also stops painting a window it wrongly
+# believes hidden — after a virtual-desktop switch or behind a topmost window —
+# and it doesn't always resume: the window stays black. Off for every WebView2
+# here, along with the backgrounding of "occluded" windows. ElasticOverscroll is
+# pywebview's own argument, which the variable replaces.
+_PROXY_BYPASS_ARG = (
+    "--proxy-bypass-list=localhost;127.0.0.1;<local>"
+    " --disable-features=ElasticOverscroll,CalculateNativeWinOcclusion"
+    " --disable-backgrounding-occluded-windows"
+)
 os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", _PROXY_BYPASS_ARG)
 
 
@@ -134,12 +144,8 @@ def main_hubi():
         # Hubi's beeps use WebAudio, which WebView2 keeps muted until the page
         # is clicked (autoplay policy); Hubi is rarely clicked. Its WebView2 runs
         # in private mode with its own browser process, so this only affects
-        # Hubi. Keeps pywebview's own argument (the variable replaces it).
-        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = (
-            "--disable-features=ElasticOverscroll,CalculateNativeWinOcclusion"
-            " --disable-backgrounding-occluded-windows"
-            " --autoplay-policy=no-user-gesture-required"
-        )
+        # Hubi. Same base arguments as Dev Hub (proxy bypass, no occlusion).
+        os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = _PROXY_BYPASS_ARG + " --autoplay-policy=no-user-gesture-required"
     try:
         port = serve_own_ui(_ui_dist_dir())
         hubi_api.start(f"http://localhost:{port}")
