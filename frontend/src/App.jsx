@@ -3240,6 +3240,63 @@ function ConnectionBadge({ info }) {
   )
 }
 
+// A run that died on « port already in use »: who holds the port (often a
+// server started by Claude Code, the IDE or another terminal — not an orphan
+// of Dev Hub), with a one-click « free it and run again ».
+function PortConflictBanner({ terminalId, onRestart, onNotify }) {
+  const [conflict, setConflict] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    setConflict(null)
+    api()
+      ?.run_port_conflict?.(terminalId)
+      ?.then((r) => alive && setConflict(r?.port ? r : null))
+    return () => {
+      alive = false
+    }
+  }, [terminalId])
+
+  if (!conflict) return null
+  const { port, owner } = conflict
+
+  async function free(restart) {
+    setBusy(true)
+    const r = await api().free_port(port)
+    setBusy(false)
+    if (r?.error) {
+      onNotify(r.error, true)
+      return
+    }
+    setConflict(null)
+    if (restart) onRestart()
+    else onNotify(`Port ${port} libéré`)
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-warning/40 bg-warning-bg px-3.5 py-2.5">
+      <IconAlertCircle className="h-4 w-4 shrink-0 text-warning" />
+      <div className="min-w-0 flex-1 text-[12px]">
+        <p className="font-medium text-text">Le port {port} est déjà utilisé</p>
+        <p className="mt-0.5 truncate text-muted" title={owner.command}>
+          par <span className="font-mono text-text">{owner.name}</span> (PID {owner.pid})
+          {owner.launcher && <> · lancé par {owner.launcher}</>}
+          {owner.project && <> · projet {owner.project}</>}
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <Button variant="ghost" disabled={busy} onClick={() => free(false)}>
+          Libérer le port
+        </Button>
+        <Button variant="primary" disabled={busy} onClick={() => free(true)}>
+          {busy ? 'Libération…' : 'Libérer et relancer'}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) {
   const chipsScroll = useAutoHideScroll()
   const [configs, setConfigs] = useState([])
@@ -3524,6 +3581,18 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
                 )}
               </div>
             )
+          })()}
+
+          {(() => {
+            const selectedRun = selected ? runningConfigs[selected] : null
+            return selectedRun && !selectedRun.running && selectedRun.terminalId ? (
+              <PortConflictBanner
+                key={selectedRun.terminalId}
+                terminalId={selectedRun.terminalId}
+                onRestart={() => startConfig(selected)}
+                onNotify={onNotify}
+              />
+            ) : null
           })()}
 
           {runTabOrder.filter((n) => runningConfigs[n]).length > 1 && (

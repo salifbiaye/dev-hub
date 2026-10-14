@@ -5,6 +5,8 @@ backend/__pycache__/
 backend/**/__pycache__/
 backend/build/
 backend/dist/
+backend/dist-next/
+backend/build-next/
 *.pyc
 
 # Node / frontend
