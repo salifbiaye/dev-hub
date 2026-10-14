@@ -160,13 +160,22 @@ class WindowsPlatform(base.PlatformService):
     def overlay_dpi_scale(self, win):
         return _overlay.dpi_scale(win)
 
+    def overlay_set_hit_region(self, win, rects):
+        return _overlay.set_hit_region(win, rects)
+
+    def create_transparent_window(self, url, rect, api, user_data_dir, on_ready=None, on_closed=None):
+        from .composition_window import CompositionWindow
+
+        win = CompositionWindow(url, rect, api, user_data_dir, on_ready, on_closed)
+        return win if win.start() else None
+
     def overlay_follow_desktops(self, win, enabled):
         from . import virtual_desktop
 
-        form = _overlay._form(win)
-        if form is None:
+        hwnd = _overlay._hwnd(win)
+        if not hwnd:
             return False
-        virtual_desktop.follow(form.Handle.ToInt64(), enabled)
+        virtual_desktop.follow(hwnd, enabled)
         return True
 
     def overlay_screen(self):

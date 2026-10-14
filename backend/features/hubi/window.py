@@ -62,6 +62,8 @@ _last_poll = {"at": None}
 FRAME_STALL = 6.0
 _frames = {"count": None, "at": None}
 _applied = {"size": None}
+_last_hits = {"rects": None}
+_transparent = {"on": False}  # this run uses the transparent window
 
 # poll() runs ~30x/s; the theme name comes from config.json, so it is re-read
 # at most once per THEME_REFRESH seconds.
@@ -86,6 +88,7 @@ def _cfg():
         "follow_theme": bool(cfg.get("follow_theme", True)),
         "sound": bool(cfg.get("sound", True)),
         "all_desktops": bool(cfg.get("all_desktops", True)),
+        "frameless": bool(cfg.get("frameless", False)),
         "mascot": cfg.get("mascot") if cfg.get("mascot") in dict(MASCOTS) else DEFAULT_MASCOT,
         "x": cfg.get("x"),
         "y": cfg.get("y"),
@@ -140,6 +143,11 @@ def follows_theme():
 def set_follow_theme(value):
     _save(follow_theme=bool(value))
     _theme_cache["at"] = 0.0  # let the next poll pick it up immediately
+
+
+def frameless():
+    """The setting (applies at Hubi's next start)."""
+    return _cfg()["frameless"]
 
 
 def all_desktops():
@@ -280,7 +288,8 @@ def _watchdog():
             try:
                 # A fresh query string: setting WebView2's Source to the URL it
                 # already has is a no-op, even after its renderer crashed.
-                win.load_url(f"{_base_url}/hubi.html?r={int(time.time())}")
+                extra = "&frameless=1" if _transparent["on"] else ""
+                win.load_url(f"{_base_url}/hubi.html?r={int(time.time())}{extra}")
             except Exception:
                 pass
             # The fresh page knows nothing: resend badges, bubble and mood.
@@ -296,12 +305,73 @@ def _on_closed():
     _window = None
 
 
+# Default clickable area (canvas units, 400 x 240) until the page sends its
+# own: the body, its hands and its shadow.
+_DEFAULT_HITS = [[100, 34, 200, 186, 56]]
+
+
+def _set_hits(win, rects):
+    r = platform_svc.overlay_rect(win)
+    if r is None:
+        return
+    k = r[2] / 400.0
+    # A few pixels of margin: the region also clips what is drawn.
+    m = 6
+    platform_svc.overlay_set_hit_region(
+        win, [[x * k - m, y * k - m, w * k + 2 * m, h * k + 2 * m, rr * k + m] for x, y, w, h, rr in rects]
+    )
+
+
+def _on_transparent_ready():
+    try:
+        platform_svc.overlay_follow_desktops(_window, all_desktops)
+    except Exception:
+        pass
+    _apply_geometry()
+    _set_hits(_window, _last_hits["rects"] or _DEFAULT_HITS)
+    if not _cfg()["visible"]:
+        platform_svc.overlay_set_visible(_window, False)
+    threading.Thread(target=_watchdog, daemon=True).start()
+
+
+def _create_transparent():
+    """« Mascotte seule »: a composition-hosted WebView2 with a really
+    transparent background (core/platform/windows/composition_window.py).
+    Plus a hidden pywebview window: webview.start() needs one, and Hubi's
+    other windows (quick add) are pywebview's."""
+    from app_config import APP_DATA_DIR
+
+    w, h = _physical_size(_cfg()["size"])
+    x, y = _cfg()["x"], _cfg()["y"]
+    if not (isinstance(x, int) and isinstance(y, int)):
+        x, y = -4000, -4000  # _apply_geometry() places it once ready
+    win = platform_svc.create_transparent_window(
+        f"{_base_url}/hubi.html?frameless=1",
+        (x, y, w, h),
+        HubiApi(),
+        str(APP_DATA_DIR / "hubi-webview2"),
+        on_ready=_on_transparent_ready,
+        on_closed=_on_closed,
+    )
+    if win is None:
+        return None
+    _transparent["on"] = True
+    webview.create_window("Hubi (ancre)", html="", hidden=True, width=1, height=1, focus=False)
+    return win
+
+
 def create():
     """Create the widget window (call before webview.start(), or later from
     any thread — pywebview supports both). No-op if it already exists."""
     global _window
     if _window is not None or _base_url is None:
         return _window
+    if _cfg()["frameless"]:
+        win = _create_transparent()
+        if win is not None:
+            _window = win
+            return _window
+        # Not supported here (or failed): the framed window below.
     w, h = SIZES[_cfg()["size"]]
     _window = webview.create_window(
         "Hubi",
@@ -411,7 +481,7 @@ class HubiApi:
     """The js_api object for the widget page. Public methods only: pywebview
     exposes every public attribute, so no state lives on the instance."""
 
-    def poll(self, frames=None):
+    def poll(self, frames=None, hits=None):
         global _last_topmost
         win = _window
         if win is None:
@@ -435,17 +505,25 @@ class HubiApi:
             cmds = list(_cmds)
             _cmds.clear()
         cfg = _cfg()
+        # Transparent window: only what the page draws takes clicks; the page
+        # sends its drawn areas (canvas units) when they change.
+        if hits and _transparent["on"]:
+            _last_hits["rects"] = hits[:12]
+            _set_hits(win, _last_hits["rects"])
         # Dev Hub's Hubi page only writes config.json: apply a new size here.
         if _applied["size"] is None:
             _applied["size"] = cfg["size"]
         elif cfg["size"] != _applied["size"]:
             _applied["size"] = cfg["size"]
             set_size(cfg["size"])
+            if _transparent["on"]:
+                _set_hits(win, _last_hits["rects"] or _DEFAULT_HITS)
         return {
             "cursor": cursor,
             "idle": platform_svc.idle_seconds(),
             "theme": _current_theme(),
             "mascot": cfg["mascot"],
+            "frameless": _transparent["on"],
             "cmds": cmds,
         }
 

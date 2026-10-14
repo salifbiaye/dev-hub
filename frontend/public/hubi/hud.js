@@ -105,6 +105,7 @@
     ctx.textBaseline = 'middle'
     ctx.fillText(text, x + 10 + iconW, y + h / 2 + 1)
     ctx.restore()
+    return [x, y, w, h, 10]
   }
 
   // Sessions en cours par outil : « ● 2 Claude · ● 1 Codex », en haut à gauche
@@ -118,7 +119,7 @@
     const parts = Object.keys(TOOL_STYLE)
       .filter((tool) => counts[tool] > 0)
       .map((tool) => ({ text: counts[tool] + ' ' + TOOL_STYLE[tool].label, color: TOOL_STYLE[tool].color }))
-    if (!parts.length) return
+    if (!parts.length) return null
     ctx.save()
     ctx.font = BADGE_FONT
     const DOT = 14
@@ -142,6 +143,7 @@
       cx += DOT + widths[i] + GAP
     })
     ctx.restore()
+    return [x, y, w, h, 10]
   }
 
   function formatRemaining(ms) {
@@ -198,5 +200,8 @@
     if (audio && audio.state === 'suspended') audio.resume()
   }
 
-  global.HubiHud = { drawBubble, drawBadge, drawSessions, formatRemaining, beep, unlockAudio, TONES }
+  const BUBBLE_RECT = [10, 150, W - 20, 82, 16]
+
+  global.HubiHud = {
+    BUBBLE_RECT, drawBubble, drawBadge, drawSessions, formatRemaining, beep, unlockAudio, TONES }
 })(window)

@@ -112,6 +112,22 @@
   let lastFrame = performance.now()
   let frames = 0 // images dessinées : Python recharge la page si ça n'avance plus
 
+  // Mode « mascotte seule » : la fenêtre n'accepte les clics que là où Hubi
+  // dessine. Les zones (unités du canevas) partent avec le prochain poll,
+  // seulement quand elles changent (arrondies à 4 px près).
+  // Fenêtre transparente : dès le chargement (pas de flash du panneau noir).
+  let frameless = new URLSearchParams(location.search).has('frameless')
+  if (frameless) eyes.setFrameless(true)
+  let hitsKey = ''
+  let pendingHits = null
+  function noteHits(rects) {
+    const rounded = rects.map((r) => r.map((v) => Math.round(v / 4) * 4))
+    const key = JSON.stringify(rounded)
+    if (key === hitsKey) return
+    hitsKey = key
+    pendingHits = rounded
+  }
+
   function frame(now) {
     frames++
     const dt = (now - lastFrame) / 1000
@@ -157,18 +173,22 @@
     const k = 1 - Math.exp(-dt * 12)
     bubbleAlpha += ((bubble ? 1 : 0) - bubbleAlpha) * k
     eyes.setSqueeze(!!bubble)
+    const hits = [eyes.bodyRect()]
     if (bubbleAlpha > 0.02 && lastBubble) {
       HubiHud.drawBubble(ctx, lastBubble.text, lastBubble.tone, accent, bubbleAlpha)
+      if (bubbleAlpha > 0.3) hits.push(HubiHud.BUBBLE_RECT)
     }
     if (timer) {
       const left = timer.end - Date.now()
       const color = left < 60000 ? HubiHud.TONES.warn : accent
-      HubiHud.drawBadge(ctx, HubiHud.formatRemaining(left), false, color)
+      hits.push(HubiHud.drawBadge(ctx, HubiHud.formatRemaining(left), false, color))
     }
     if (openTasks > 0) {
-      HubiHud.drawBadge(ctx, String(openTasks), true, accent, 'check')
+      hits.push(HubiHud.drawBadge(ctx, String(openTasks), true, accent, 'check'))
     }
-    HubiHud.drawSessions(ctx, sessions, timer ? 44 : 6)
+    const sessionsRect = HubiHud.drawSessions(ctx, sessions, timer ? 44 : 6)
+    if (sessionsRect) hits.push(sessionsRect)
+    if (frameless) noteHits(hits)
   }
 
   function bubbleVisible() {
@@ -220,10 +240,17 @@
     if (!a) return
     const started = performance.now()
     try {
-      const res = await a.poll(frames)
+      const sendHits = pendingHits
+      pendingHits = null
+      const res = await a.poll(frames, sendHits)
       if (res) {
         idle = res.idle == null ? 0 : res.idle
         cursor = res.cursor ? { x: res.cursor[0], y: res.cursor[1] } : null
+        if (!!res.frameless !== frameless) {
+          frameless = !!res.frameless
+          eyes.setFrameless(frameless)
+          hitsKey = '' // renvoyer les zones cliquables
+        }
         if (res.mascot && res.mascot !== mascot) {
           mascot = res.mascot
           eyes.setMascot(mascot)

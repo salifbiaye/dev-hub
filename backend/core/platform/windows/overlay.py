@@ -63,12 +63,18 @@ kernel32.GetTickCount.restype = wintypes.DWORD
 
 
 def _form(win):
+    if getattr(win, "hwnd", None):
+        return None
     from webview.platforms.winforms import BrowserView
 
     return BrowserView.instances.get(win.uid)
 
 
 def _hwnd(win):
+    # The transparent composition window (composition_window.py) has no
+    # WinForms form, just its own hwnd.
+    if getattr(win, "hwnd", None):
+        return int(win.hwnd)
     form = _form(win)
     if form is None:
         return None
@@ -192,7 +198,35 @@ def set_rect(win, x=None, y=None, w=None, h=None):
     ny = cur[1] if y is None else int(y)
     nw = cur[2] if w is None else int(w)
     nh = cur[3] if h is None else int(h)
-    return bool(user32.SetWindowPos(hwnd, None, nx, ny, nw, nh, flags))
+    ok = bool(user32.SetWindowPos(hwnd, None, nx, ny, nw, nh, flags))
+    if (nw, nh) != (cur[2], cur[3]) and hasattr(win, "resize"):
+        win.resize(nw, nh)  # composition window: WebView2 bounds follow
+    return ok
+
+
+def set_hit_region(win, rects):
+    """Clickable (and, for the composition window, visible) area = these
+    rounded rects [x, y, w, h, radius] in window pixels; elsewhere clicks go
+    to the windows below."""
+    hwnd = _hwnd(win)
+    if not hwnd:
+        return False
+    gdi32 = ctypes.windll.gdi32
+    gdi32.CreateRoundRectRgn.restype = wintypes.HRGN
+    gdi32.CreateRoundRectRgn.argtypes = [ctypes.c_int] * 6
+    gdi32.CombineRgn.argtypes = [wintypes.HRGN, wintypes.HRGN, wintypes.HRGN, ctypes.c_int]
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+    user32.SetWindowRgn.argtypes = [wintypes.HWND, wintypes.HRGN, wintypes.BOOL]
+    region = None
+    for x, y, w, h, r in rects:
+        part = gdi32.CreateRoundRectRgn(int(x), int(y), int(x + w) + 1, int(y + h) + 1, int(r * 2), int(r * 2))
+        if region is None:
+            region = part
+        else:
+            gdi32.CombineRgn(region, region, part, 2)  # RGN_OR
+            gdi32.DeleteObject(part)
+    # The window owns the region from here on (no DeleteObject).
+    return bool(user32.SetWindowRgn(hwnd, region, True))
 
 
 def set_visible(win, visible):

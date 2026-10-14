@@ -233,6 +233,12 @@ export function HubiPage({ hubi, onState, onClose, onNotify, onOpenTasks, onOpen
               </div>
             </Row>
             <Row
+              title="Mascotte seule, sans cadre"
+              hint="Plus de fond noir : Hubi flotte directement sur ton bureau, et les clics à côté de lui passent aux fenêtres en dessous. Hubi redémarre pour changer de mode."
+            >
+              <Switch checked={!!hubi.frameless} disabled={busy === 'frameless'} onChange={(v) => setOption('frameless', v)} />
+            </Row>
+            <Row
               title="Visible sur tous les bureaux"
               hint="Quand tu changes de bureau virtuel (Win+Ctrl+flèches), Hubi te suit au même coin de l'écran."
             >

@@ -1,13 +1,13 @@
 # Hubi : mascotte seule, sans cadre noir
 
-Statut : **pas faisable avec l'hébergement actuel** (essayé le 2026-10-14).
+Statut : **fait** (2026-10-14) — option « Mascotte seule, sans cadre » de la page Hubi. Implémenté par la piste ci-dessous : `core/platform/windows/composition_window.py`. L'hébergement pywebview reste utilisé pour le mode avec cadre (et en secours).
 
 ## Ce qu'on veut
 
 Une option « mascotte seule » : plus de panneau noir, Hubi flotte directement
 sur le bureau, et les clics à côté de lui passent aux fenêtres en dessous.
 
-## Ce qui a été essayé (fenêtre pywebview / WinForms + contrôle WebView2)
+## Ce qui ne marche pas (fenêtre pywebview / WinForms + contrôle WebView2)
 
 | Technique | Résultat |
 |---|---|
@@ -20,7 +20,7 @@ sur le bureau, et les clics à côté de lui passent aux fenêtres en dessous.
 WebView2 n'a aucun effet ; il faut la variable
 `WEBVIEW2_DEFAULT_BACKGROUND_COLOR=0` avant le démarrage.
 
-## La piste sérieuse
+## Ce qui marche (implémenté)
 
 Héberger WebView2 en mode **composition** (comme Electron) :
 
@@ -35,5 +35,7 @@ Héberger WebView2 en mode **composition** (comme Electron) :
   contrôleur (`SendMouseInput`) : en mode composition WebView2 ne reçoit plus
   les messages souris tout seul.
 
-C'est une réécriture de la fenêtre de Hubi (hors pywebview pour cette
-fenêtre), à faire comme un chantier à part.
+Le lien page ↔ Python passe par les messages de WebView2
+(`chrome.webview.postMessage` / `WebMessageReceived`), exposés à la page sous
+la même forme `window.pywebview.api` : le code de la page est le même dans les
+deux modes. Changer de mode redémarre Hubi.

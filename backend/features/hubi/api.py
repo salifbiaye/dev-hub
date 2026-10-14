@@ -68,6 +68,7 @@ class HubiMixin:
             "follow_theme": window.follows_theme(),
             "sound": window.sound_enabled(),
             "all_desktops": window.all_desktops(),
+            "frameless": window.frameless(),
             "codex_installed": codex_watch.ROOT.exists(),
             "codex_notify": codex_watch.notify_flag(),
             # The agent chosen in Paramètres IA, and whether Hubi follows it.
@@ -106,6 +107,16 @@ class HubiMixin:
             window.set_follow_theme(bool(value))
         elif key == "sound":
             window.set_sound(bool(value))
+        elif key == "frameless":
+            # Another kind of window: takes effect when Hubi (re)starts.
+            from . import process
+
+            config = load_config()
+            config.setdefault("hubi", {})["frameless"] = bool(value)
+            save_config(config)
+            if process.is_running():
+                process.stop()
+                process.launch()
         elif key == "all_desktops":
             config = load_config()
             config.setdefault("hubi", {})["all_desktops"] = bool(value)

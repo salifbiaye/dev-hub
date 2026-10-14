@@ -155,6 +155,22 @@
     let kind = 'light' // light | graphite | auto (gris quand il dort)
     let moodName = 'normal'
     let squeezeTarget = 0
+    let frameless = false
+
+    function setFrameless(on) {
+      frameless = !!on
+    }
+
+    // Zone occupée par le corps (mains et tablette comprises), en unités du
+    // canevas, après la réduction quand une bulle s'affiche : sert de zone
+    // cliquable en mode « mascotte seule ».
+    function bodyRect() {
+      const sq = params.squeeze
+      const s = 1 - 0.38 * sq
+      const x = W / 2 + (100 - W / 2) * s
+      const y = 6 * sq + 34 * s
+      return [Math.round(x), Math.round(y), Math.round(200 * s), Math.round(186 * s), Math.round(56 * s)]
+    }
 
     function setMood(name) {
       moodName = PRESETS[name] ? name : 'normal'
@@ -434,12 +450,14 @@
       const rise = Math.sin(t * 1.5) * 2.2 + bounceY
       const bodyY = 112 + rise + p.sink * 0.5
 
-      if (!bare) {
+      if (!bare && !frameless) {
         const halo = ctx.createRadialGradient(200, 120, 10, 200, 120, 200)
         halo.addColorStop(0, 'rgba(255,255,255,0.07)')
         halo.addColorStop(1, 'rgba(255,255,255,0)')
         ctx.fillStyle = halo
         ctx.fillRect(0, 0, W, H)
+      }
+      if (!bare) {
         const lift = clamp(-rise, 0, 20)
         ctx.fillStyle = 'rgba(0,0,0,' + 0.5 * (1 - lift * 0.015) + ')'
         ctx.beginPath()
@@ -506,12 +524,15 @@
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
       ctx.clearRect(0, 0, W, H)
 
-      // Panneau noir aux coins arrondis.
+      // Panneau noir aux coins arrondis (sauf mode « mascotte seule » : fond
+      // transparent, Windows laisse voir le bureau autour).
       ctx.save()
-      roundRectPath(ctx, 0, 0, W, H, PANEL_RADIUS)
-      ctx.fillStyle = '#000'
-      ctx.fill()
-      ctx.clip()
+      if (!frameless) {
+        roundRectPath(ctx, 0, 0, W, H, PANEL_RADIUS)
+        ctx.fillStyle = '#000'
+        ctx.fill()
+        ctx.clip()
+      }
 
       if (p.squeeze > 0.001) {
         const s = 1 - 0.38 * p.squeeze
@@ -547,7 +568,7 @@
       drawBlobScene(0, 0, true)
     }
 
-    return { setMood, setBaseColor, getBaseColor, setSqueeze, setMascot, setLook, step, render, renderBare, snap, params }
+    return { setMood, setBaseColor, getBaseColor, setSqueeze, setFrameless, bodyRect, setMascot, setLook, step, render, renderBare, snap, params }
   }
 
   global.HubiEyes = { createEyes, MOOD_NAMES, TRANSIENT_MS, W, H, hueClose }

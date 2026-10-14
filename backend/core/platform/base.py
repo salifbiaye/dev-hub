@@ -114,6 +114,15 @@ class PlatformService(ABC):
     def overlay_keep_on_top(self, win):
         """Re-assert the topmost z-order (full-screen apps can bury it)."""
 
+    def overlay_set_hit_region(self, win, rects):
+        """Restrict clicks to these [x, y, w, h, radius] rects (window px)."""
+        return False
+
+    def create_transparent_window(self, url, rect, api, user_data_dir, on_ready=None, on_closed=None):
+        """A topmost web window with a truly transparent background, or None
+        where unsupported (callers then fall back to the framed window)."""
+        return None
+
     def overlay_follow_desktops(self, win, enabled):
         """Keep the window on the virtual desktop being shown while
         `enabled()` is true. No-op where unsupported."""
