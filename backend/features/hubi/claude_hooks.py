@@ -121,6 +121,33 @@ def is_enabled(token, path=None):
     return True
 
 
+def installed(path=None):
+    """Any of our hook entries present, whatever token they carry."""
+    path = path or settings_path()
+    try:
+        data, _ = _read(path)
+    except Exception:
+        return False
+    hooks = data.get("hooks")
+    if not isinstance(hooks, dict):
+        return False
+    return any(
+        isinstance(g, dict) and any(_is_ours(h) for h in (g.get("hooks") or []))
+        for groups in hooks.values()
+        if isinstance(groups, list)
+        for g in groups
+    )
+
+
+def resync(token, path=None):
+    """Hooks installed with an older token (or port) are rejected by Hubi's
+    server, silently: rewrite them with the current one. True if rewritten."""
+    if installed(path) and not is_enabled(token, path):
+        enable(token, path)
+        return True
+    return False
+
+
 def enable(token, path=None):
     path = path or settings_path()
     data, raw = _read(path)

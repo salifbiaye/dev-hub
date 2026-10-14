@@ -3,7 +3,7 @@ timer watcher, the tasks count and the quick-add hotkey."""
 import threading
 import time
 
-from . import codex_watch, quick_add, reactions, server, tasks, timer, tray, window
+from . import claude_watch, codex_watch, quick_add, reactions, server, tasks, timer, tray, window
 
 
 def tasks_changed():
@@ -58,16 +58,28 @@ def _republish_all():
     timer._push_state(timer.state())
 
 
+def _resync_claude_hooks():
+    from . import channel, claude_hooks
+
+    try:
+        claude_hooks.resync(channel.get_token())
+    except Exception:
+        pass
+
+
 def start(base_url):
+    _resync_claude_hooks()
     window.on_page_reload(lambda: threading.Thread(target=_republish_all, daemon=True).start())
     server.start(ROUTES)
     timer.start_watcher()
     tasks_changed()
     quick_add.start(base_url, tasks_changed)
     codex_watch.start()
+    claude_watch.start()
 
 
 def stop():
     codex_watch.stop()
+    claude_watch.stop()
     quick_add.stop()
     server.stop()

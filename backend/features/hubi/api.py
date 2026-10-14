@@ -51,6 +51,7 @@ class HubiMixin:
         from . import channel, claude_hooks
 
         try:
+            claude_hooks.resync(channel.get_token())
             hooks = claude_hooks.is_enabled(channel.get_token())
         except Exception:
             hooks = False

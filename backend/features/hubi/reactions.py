@@ -108,6 +108,12 @@ def _publish(transient_mood=None):
         window.send_mood(transient_mood, None)
 
 
+def session_states(tool=None):
+    """{session key: 'working' | 'waiting'} for the sessions Hubi shows now."""
+    with _lock:
+        return {k: s["state"] for k, s in _sessions.items() if tool is None or s.get("tool", "claude") == tool}
+
+
 def republish():
     """Resend the whole state (after Hubi's page was reloaded)."""
     with _lock:
