@@ -2714,7 +2714,7 @@ function DatabasePanel({ repo, onNotify }) {
       <div className="flex flex-col items-center gap-3">
         <EmptyState message="Aucune base de données détectée (.env, config Spring, Prisma, ou fichier SQLite)." />
         {configOpen ? (
-          <div className="w-72">
+          <div className="w-full max-w-lg">
             <DbConfigForm repo={repo} info={connInfo} onSaved={onConfigSaved} onCancel={() => setConfigOpen(false)} onNotify={onNotify} />
           </div>
         ) : (
@@ -2737,7 +2737,7 @@ function DatabasePanel({ repo, onNotify }) {
           <p className="max-w-sm font-mono text-[11px] text-muted">{connError}</p>
         </div>
         {configOpen ? (
-          <div className="w-72 self-center">
+          <div className="w-full max-w-lg self-center">
             <DbConfigForm repo={repo} info={connInfo} onSaved={onConfigSaved} onCancel={() => setConfigOpen(false)} onNotify={onNotify} />
           </div>
         ) : (
@@ -2766,7 +2766,7 @@ function DatabasePanel({ repo, onNotify }) {
     >
       <aside className="flex w-56 shrink-0 flex-col border-r border-border">
         <div className="flex min-h-[57px] items-center border-b border-border p-2.5">
-          <div className="flex w-full items-start justify-between gap-2">
+          <div className="flex w-full min-w-0 items-start justify-between gap-2">
             <ConnectionBadge info={connInfo} />
             <div className="flex shrink-0 items-center gap-2">
               <button
@@ -2789,7 +2789,7 @@ function DatabasePanel({ repo, onNotify }) {
 
         {configOpen && (
           <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/50 p-4" onClick={() => setConfigOpen(false)}>
-            <div onClick={(e) => e.stopPropagation()} className="w-full max-w-xs">
+            <div onClick={(e) => e.stopPropagation()} className="theme-scroll max-h-[90vh] w-full max-w-lg overflow-y-auto">
               <DbConfigForm repo={repo} info={connInfo} onSaved={onConfigSaved} onCancel={() => setConfigOpen(false)} onNotify={onNotify} />
             </div>
           </div>
@@ -3103,7 +3103,9 @@ function DbConfigForm({ repo, info, onSaved, onCancel, onNotify }) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState(null)
 
-  const input = 'rounded-md border border-border bg-base px-2.5 py-1.5 text-[11px] text-text outline-none focus:border-accent'
+  const input =
+    'w-full min-w-0 rounded-lg border border-border bg-base px-3 py-2 font-mono text-[12px] text-text outline-none transition-colors focus:border-accent'
+  const label = 'mb-1 block text-[11px] font-medium text-muted'
 
   function currentCfg() {
     return { engine, host, port: port || undefined, database, user, password, file, uri }
@@ -3145,72 +3147,107 @@ function DbConfigForm({ repo, info, onSaved, onCancel, onNotify }) {
   }
 
   return (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3">
-      <div className="flex items-center justify-between">
-        <span className="text-[11px] font-medium text-text">Connexion manuelle</span>
-        <button onClick={onCancel} className="text-muted hover:text-text cursor-pointer" title="Annuler">
-          <IconClose className="h-3.5 w-3.5" />
+    <div className="flex w-full flex-col gap-4 rounded-xl border border-border-strong bg-surface p-5 shadow-2xl">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-text">Connexion à la base</h3>
+          <p className="mt-0.5 text-[11.5px] text-muted">
+            {info?.manual ? 'Configuration manuelle pour ce projet.' : 'Remplace la détection automatique pour ce projet.'}
+          </p>
+        </div>
+        <button onClick={onCancel} className="shrink-0 cursor-pointer rounded-md p-1 text-muted hover:bg-surface-hover hover:text-text" title="Annuler">
+          <IconClose className="h-4 w-4" />
         </button>
       </div>
 
-      <Select
-        value={engine}
-        onChange={setEngine}
-        options={DB_ENGINES.map((e) => ({ value: e.id, label: e.label }))}
-        className={`${input} flex w-full min-w-0 cursor-pointer items-center justify-between`}
-      />
+      <div>
+        <span className={label}>Moteur</span>
+        <Select
+          value={engine}
+          onChange={setEngine}
+          options={DB_ENGINES.map((e) => ({ value: e.id, label: e.label }))}
+          className={`${input} flex cursor-pointer items-center justify-between font-sans`}
+        />
+      </div>
 
       {engine === 'sqlite' ? (
-        <input value={file} onChange={(e) => setFile(e.target.value)} placeholder="Chemin du fichier .db" className={`${input} w-full min-w-0 font-mono`} />
+        <label className="block">
+          <span className={label}>Fichier</span>
+          <input value={file} onChange={(e) => setFile(e.target.value)} placeholder="chemin/vers/base.db" className={input} />
+        </label>
       ) : engine === 'mongo' ? (
-        <input
-          value={uri}
-          onChange={(e) => setUri(e.target.value)}
-          placeholder={preset?.engine === 'mongo' ? 'URI enregistrée — laisser vide' : 'mongodb://user:pass@host:27017/base'}
-          className={`${input} w-full min-w-0 font-mono`}
-        />
+        <label className="block">
+          <span className={label}>URI de connexion</span>
+          <input
+            value={uri}
+            onChange={(e) => setUri(e.target.value)}
+            placeholder={preset?.engine === 'mongo' ? 'URI enregistrée — laisser vide pour la garder' : 'mongodb://user:pass@host:27017/base'}
+            className={input}
+          />
+        </label>
       ) : (
-        <>
-          <div className="flex min-w-0 gap-2">
-            <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="Hôte" className={`${input} min-w-0 flex-1 font-mono`} />
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_7rem]">
+          <label className="block min-w-0">
+            <span className={label}>Hôte</span>
+            <input value={host} onChange={(e) => setHost(e.target.value)} placeholder="localhost" className={input} />
+          </label>
+          <label className="block min-w-0">
+            <span className={label}>Port</span>
             <input
               value={port}
               onChange={(e) => setPort(e.target.value)}
               placeholder={String(DB_ENGINES.find((e) => e.id === engine)?.port || '')}
-              className={`${input} w-16 shrink-0 font-mono`}
+              inputMode="numeric"
+              className={input}
             />
-          </div>
-          <input value={database} onChange={(e) => setDatabase(e.target.value)} placeholder="Base" className={`${input} w-full min-w-0 font-mono`} />
-          <input value={user} onChange={(e) => setUser(e.target.value)} placeholder="Utilisateur" className={`${input} w-full min-w-0 font-mono`} />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder={info?.has_password ? 'Mot de passe (inchangé)' : 'Mot de passe'}
-            className={`${input} w-full min-w-0 font-mono`}
-          />
-        </>
+          </label>
+          <label className="block min-w-0 sm:col-span-2">
+            <span className={label}>Base</span>
+            <input value={database} onChange={(e) => setDatabase(e.target.value)} placeholder="nom_de_la_base" className={input} />
+          </label>
+          <label className="block min-w-0 sm:col-span-2">
+            <span className={label}>Utilisateur</span>
+            <input value={user} onChange={(e) => setUser(e.target.value)} placeholder="root" className={input} />
+          </label>
+          <label className="block min-w-0 sm:col-span-2">
+            <span className={label}>Mot de passe</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder={info?.has_password ? 'Inchangé — laisser vide pour le garder' : ''}
+              className={input}
+            />
+          </label>
+        </div>
       )}
 
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" onClick={test} disabled={testing || saving}>
-          {testing ? 'Test…' : 'Tester la connexion'}
-        </Button>
-        <Button variant="primary" onClick={save} disabled={saving}>
-          {saving ? 'Enregistrement…' : 'Enregistrer'}
-        </Button>
+      {testResult && (
+        <div
+          className={`flex items-start gap-2 rounded-lg px-3 py-2 text-[11.5px] ${
+            testResult.ok ? 'bg-success-bg text-success' : 'bg-danger-bg text-danger'
+          }`}
+        >
+          {testResult.ok ? <IconCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" /> : <IconAlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+          <span className="min-w-0 break-words">{testResult.ok ? 'Connexion réussie' : testResult.error}</span>
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4">
         {info?.manual && (
           <Button variant="ghost" onClick={resetToAuto}>
-            Détection auto
+            Revenir à la détection auto
           </Button>
         )}
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <Button variant="ghost" onClick={test} disabled={testing || saving}>
+            {testing ? 'Test…' : 'Tester la connexion'}
+          </Button>
+          <Button variant="primary" onClick={save} disabled={saving}>
+            {saving ? 'Enregistrement…' : 'Enregistrer'}
+          </Button>
+        </div>
       </div>
-      {testResult && (
-        <span className={`flex items-center gap-1 text-[11px] ${testResult.ok ? 'text-success' : 'text-danger'}`}>
-          {testResult.ok ? <IconCheck className="h-3 w-3" /> : <IconAlertCircle className="h-3 w-3" />}
-          {testResult.ok ? 'Connexion réussie' : testResult.error}
-        </span>
-      )}
     </div>
   )
 }
@@ -3224,7 +3261,7 @@ function ConnectionBadge({ info }) {
         ? `${info.host}/${info.database}`
         : `${info.host}:${info.port}/${info.database}`
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-1 flex-col gap-1">
       <div className="flex items-center gap-1">
         <span className="w-fit rounded-full bg-accent-bg px-2 py-0.5 font-mono text-[10px] text-accent">
           {info.label}
