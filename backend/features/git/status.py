@@ -72,6 +72,12 @@ class GitStatusMixin:
             return {"error": err or "git diff a échoué"}
         if out.strip():
             return {"diff": out[:cap]}
+        if full:
+            # The Code tab only views: never touch the index for it (the
+            # add/reset below would unstage a file the user had staged). An
+            # empty diff — untracked file, or only CRLF/LF differences — means
+            # the viewer shows the file as is.
+            return {"diff": ""}
 
         # `git diff HEAD` never covers untracked files, so a repo that's
         # entirely new files (first commit, or a freshly scanned repo) comes

@@ -4477,8 +4477,25 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
       // uncommitted changes highlighted, not a compact patch review.
       api()
         .get_diff(repo.path, [file], true)
-        .then((r) => {
+        .then(async (r) => {
           if (!alive) return
+          if (!r?.error && !(r?.diff || '').trim()) {
+            // Marked changed but nothing to diff (new file, or only line
+            // endings changed): show the file itself instead of an empty view.
+            const c = await api().read_file_content(repo.path, file)
+            if (!alive) return
+            setDiffRows(null)
+            if (c?.content != null) {
+              setContent(c.content)
+              setRaw(toLf(c.content))
+              setMeta(null)
+            } else {
+              setContent(null)
+              setMeta(c)
+            }
+            setLoading(false)
+            return
+          }
           setDiffRows(parseDiffLines(r?.diff || ''))
           setContent(null)
           setMeta(r?.error ? r : null)
