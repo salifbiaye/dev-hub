@@ -8470,13 +8470,8 @@ export default function App() {
       )}
       <SplashScreen ready={ready} />
       {!appFullscreen && (
-      <header className="pywebview-drag-region flex shrink-0 items-center justify-between gap-4 overflow-x-auto border-b border-border px-6 py-4">
-        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-white">
-            <IconLayers className="h-4 w-4" />
-          </span>
-          <h1 className="text-[15px] font-semibold tracking-tight">Dev Hub</h1>
-        </div>
+      {/* No "Dev Hub" logo here: every tab already carries it. */}
+      <header className="pywebview-drag-region flex shrink-0 items-center justify-end gap-4 overflow-x-auto border-b border-border px-6 py-4">
         <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
           <Button variant="subtle" onClick={() => setGlobalSearchOpen(true)}>
             <IconSearch className="h-3.5 w-3.5" />
