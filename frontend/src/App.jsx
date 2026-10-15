@@ -7252,30 +7252,21 @@ function loadActiveTab(tabs) {
   return tabs[0].id
 }
 
-// Light or dark theme, from the luminance of --color-base: the tab strip is a
-// shade darker than the page in both, but by how much differs a lot.
-function themeIsLight() {
-  const value = getComputedStyle(document.documentElement).getPropertyValue('--color-base').trim()
-  const m = value.match(/^#([0-9a-f]{6})$/i)
-  if (!m) return false
-  const n = parseInt(m[1], 16)
-  const lum = (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255
-  return lum > 0.5
+// Colors that depend on the theme being light or dark: CSS light-dark(),
+// resolved by the browser from each theme's `color-scheme` — reading the
+// theme from JS at render time lagged one theme behind when switching.
+const TAB_STRIP_STYLE = {
+  background:
+    'light-dark(color-mix(in srgb, var(--color-base) 91%, #000), color-mix(in srgb, var(--color-base) 62%, #000))',
 }
-
-function tabStripStyle(light) {
-  return {
-    background: light
-      ? 'color-mix(in srgb, var(--color-base) 91%, #000)'
-      : 'color-mix(in srgb, var(--color-base) 62%, #000)',
-  }
-}
+const TAB_HOVER = 'tab-hover' // index.css
+const TAB_BTN_HOVER = 'tab-btn-hover'
 
 // Windows File Explorer–style tabs, in the title bar: the active one opens
 // onto the page below, the others sit on the darker strip.
 function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
-  const hover = themeIsLight() ? 'hover:bg-black/[0.06]' : 'hover:bg-white/[0.05]'
-  const btnHover = themeIsLight() ? 'hover:bg-black/10' : 'hover:bg-white/10'
+  const hover = TAB_HOVER
+  const btnHover = TAB_BTN_HOVER
   return (
     <div className="flex h-full min-w-0 items-end gap-0 pl-2">
       {tabs.map((t, i) => {
@@ -7364,7 +7355,7 @@ function TitleBar({ children }) {
   return (
     <div
       className={`pywebview-drag-region flex shrink-0 items-center ${children ? 'h-10' : 'h-8 bg-base'}`}
-      style={children ? tabStripStyle(themeIsLight()) : undefined}
+      style={children ? TAB_STRIP_STYLE : undefined}
     >
       <div className="flex h-full min-w-0 flex-1 items-end">{children}</div>
       <button

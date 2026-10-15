@@ -813,3 +813,12 @@ body {
 .splash-ripple {
   animation: splash-ripple 1.8s ease-out infinite;
 }
+
+/* Title-bar tabs (TabStrip in App.jsx): hovers that suit light and dark
+   themes alike, picked by the browser from each theme's color-scheme. */
+.tab-hover:hover {
+  background: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.05));
+}
+.tab-btn-hover:hover {
+  background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
+}
