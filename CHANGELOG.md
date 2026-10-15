@@ -6,8 +6,26 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.6.0] - 2026-10-15
+
 ### ✨ Nouveautés
-- Hubi (bêta, désactivé par défaut) : un petit compagnon qui flotte en haut à droite de l'écran, toujours au-dessus, sans voler le focus. Corps doux et neutre (blanc, graphite, ou « auto » : blanc éveillé, gris quand il dort), deux ovales pour yeux, et des mains qui sortent avec une tablette montrant l'état de la session seulement quand elles servent (la couleur du thème n'apparaît que sur la tablette). 14 humeurs, regard qui suit le curseur, clignements, sommeil après 60 s d'inactivité, rire au clic, déplaçable à la souris, tailles S/M/L/XL, icône de zone de notification avec menu. À activer avec `"hubi": {"enabled": true}` dans `config.json`, `DEV_HUB_HUBI=1`, ou seul avec `python backend/hubi_main.py`. Images de la mascotte dans `docs/mascot/`
+- **Onglets façon Explorateur Windows** : chaque onglet est un Dev Hub complet qui garde son état (projet, fichier ouvert, logs). Glisser pour réordonner, Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+1…9, onglets rouverts au redémarrage
+- **Hubi, le compagnon de bureau** : un petit personnage qui flotte dans un coin de l'écran, même Dev Hub fermé. 14 humeurs, il suit tes sessions Claude Code et Codex (nombre de sessions en cours, fin, erreur, réponse attendue), tes runs et ton minuteur, avec bulles et sons
+- Hubi : **tâches** par projet ajoutées de n'importe où (Ctrl+Alt+H, `@projet`), lancées dans une nouvelle session Claude/Codex ou une session existante
+- Hubi : page dédiée dans Dev Hub — mascotte clair / graphite / auto, tailles, **mascotte seule sans cadre** (vraie transparence, les clics à côté passent aux fenêtres dessous), visible sur tous les bureaux virtuels, démarrage avec Windows, raccourci bureau
+- **Codex** au même niveau que Claude Code : sessions listées et reprises, tâches, notifications Hubi ; Paramètres IA séparés en agents et « messages de commit uniquement »
+- Onglet Code : **édition des fichiers** (Ctrl+S) et **aperçu Markdown / HTML**, explorateur élargissable
+- Exécution : quand un **port est déjà utilisé**, Dev Hub montre qui le tient (et ce qui l'a lancé) et le libère en un clic avant de relancer
+- Fenêtres Dev Hub et navigateur reconnues par Windows (Snap, glisser natif, bordure) ; menus Outils et + Ajouter ; actualisation avec squelette ; panneau Processus propre à l'onglet qui l'ouvre
+- Navigateur intégré : indicateur de chargement et page d'erreur aux couleurs du thème
+- Formulaire de connexion BDD plus lisible
+
+### 🐛 Corrections
+- Génération du message de commit IA qui restait bloquée
+- Commit qui échouait sur un fichier disparu ou une suppression déjà indexée (« pathspec did not match any files »)
+- Fenêtres Dev Hub ou Hubi parfois noires (après un changement de bureau virtuel ou une sortie de veille)
+- Vue Code vide sur certains fichiers modifiés (fins de ligne), et ouvrir un fichier ne retire plus un fichier de la zone de staging
+- Barre rapide de Hubi en « Error 404 » ; nettoyage des dossiers temporaires laissés par Dev Hub
 
 ## [0.5.0] - 2026-10-06
 

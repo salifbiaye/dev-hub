@@ -9,11 +9,18 @@ Construit avec **Python (pywebview)** pour le shell desktop et **React + Tailwin
 
 https://github.com/user-attachments/assets/53926734-5a0f-402b-9c2d-14c715899742
 
+▶ Présentation de la v0.6 (onglets, Hubi…) : [devhub-annonce-v20.MP4](devhub-annonce-v20.MP4)
+
 ## Pourquoi
 
 Quand on a plusieurs projets (front, back, side-projects...), chacun avec son propre IDE, sa propre base de données, ses propres variables d'env et sa propre commande de lancement, on finit par perdre du temps à jongler entre fenêtres. Dev Hub centralise tout ça dans un seul endroit, avec une interface rapide et personnalisable.
 
 ## Fonctionnalités
+
+### Onglets
+- Des **onglets comme dans l'Explorateur Windows**, dans la barre de titre : chaque onglet est un Dev Hub complet (accueil, groupe, projet, page Hubi) qui garde son état quand on passe à un autre
+- Glisser pour réordonner, `Ctrl T` / `Ctrl W` / `Ctrl Tab` / `Ctrl 1…9`, clic molette pour fermer, onglets rouverts au redémarrage
+- Fenêtres reconnues par Windows : **Snap** (bords d'écran), glisser natif, bordure
 
 ### Gestion de repos
 - Liste de tous tes repos git, ajout manuel ou **scan automatique** d'un dossier parent (détecte tous les repos `.git` d'un coup)
@@ -46,19 +53,38 @@ Quand on a plusieurs projets (front, back, side-projects...), chacun avec son pr
 - Détection automatique des fichiers `.env*` d'un repo
 - Édition façon Vercel : valeurs masquées, révélation à la demande, ajout/suppression, sauvegarde qui préserve le reste du fichier
 
+### Code
+- Explorateur de fichiers du projet (élargissable), recherche `Ctrl P`, diff des fichiers modifiés
+- **Édition** directe des fichiers (`Ctrl S`), **aperçu Markdown / HTML** rendu
+
 ### Exécution de commandes (Run)
 - Commandes nommées par repo (ex: `npm run dev`) avec variables d'env dédiées
 - Terminal de logs en direct avec **coloration automatique**, recherche dans le terminal, copie
-- Panneau **Processus** global : onglets réordonnables pour switcher entre toutes les commandes en cours, avec aperçu navigateur intégré (iframe, y compris les sites qui bloquent le framing) et détection automatique de l'URL locale
+- **Port déjà utilisé** : Dev Hub montre qui tient le port (et ce qui l'a lancé : Claude Code, IntelliJ…) et le libère en un clic avant de relancer
+- Panneau **Processus** (dans l'onglet qui l'ouvre) : onglets réordonnables pour switcher entre toutes les commandes en cours, avec aperçu navigateur intégré (iframe, y compris les sites qui bloquent le framing) et détection automatique de l'URL locale
 - Détection et nettoyage des **process orphelins**, et des profils WebView2 laissés par d'anciens lancements
 
 ### Sessions IA
 - Terminal **interactif embarqué** (xterm.js + pseudo-terminal Windows natif) pour Claude Code / Codex / autre CLI, directement dans l'app
-- Liste des sessions passées par repo, avec reprise en un clic
+- Liste des sessions passées par repo (Claude Code **et Codex**), avec reprise en un clic
+- Paramètres IA séparés en **agents** (Claude Code, Codex : commits, sessions, tâches, Hubi) et **messages de commit uniquement** (OpenAI, DeepSeek, Anthropic, API perso)
+
+### Hubi, le compagnon de bureau
+Un petit compagnon qui flotte dans un coin de l'écran, toujours au-dessus, sans voler le focus — même Dev Hub fermé.
+
+<p align="center">
+  <img src="docs/mascot/humeurs.png" alt="Les 14 humeurs de Hubi" />
+</p>
+
+- **14 humeurs** : il s'endort quand tu ne touches à rien, travaille avec sa tablette pendant que Claude/Codex bosse, lève une alerte quand une session attend ta réponse, rit quand on clique dessus…
+- **Suit tes sessions Claude Code et Codex** : nombre de sessions en cours par outil (« ● 2 Claude »), session terminée ou en erreur, avec bulle et son
+- **Tâches** par projet (ajout de n'importe où avec `Ctrl Alt H` et `@projet`), lancées dans une nouvelle session Claude/Codex ou une session existante
+- **Minuteur**, erreurs de runs Dev Hub, sons
+- Page dédiée dans Dev Hub : mascotte **clair / graphite / auto**, tailles, **« mascotte seule » sans cadre** (vraie transparence, les clics à côté passent aux fenêtres dessous), visible sur **tous les bureaux virtuels**, démarrage avec Windows, raccourci bureau
 
 ### Interface
-- **17 thèmes** (dont plusieurs inspirés de Tokyo Night, Dracula, Nord, Catppuccin, Gruvbox…), persistés
-- Barre de titre personnalisée, sans chrome Windows
+- **31 thèmes** clairs et sombres (Tokyo Night, Dracula, Nord, Catppuccin, Gruvbox, GitHub, Atom One…), persistés
+- Barre de titre personnalisée avec les onglets
 - **Raccourcis clavier** (`Ctrl K` recherche, `Ctrl H` aide, `Échap` fermer)
 - Zoom réglable, panneau de logs global
 
