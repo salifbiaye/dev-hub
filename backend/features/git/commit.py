@@ -36,12 +36,19 @@ class GitCommitMixin:
                 safe_files = [f for f in safe_files if f in current]
                 if not safe_files:
                     return {"error": "Les fichiers sélectionnés n'ont plus de changements à committer"}
+                # Already fully staged (a `git rm`, a staged rename…): nothing
+                # left to add, and `git add` would even reject a staged
+                # deletion's path. The commit takes the index as is.
+                safe_files = [f for f in safe_files if current[f]]
             # Plain `git add -- <path>` only picks up new/modified content in
             # the working tree — a path that's been deleted matches nothing
             # there, so it fails with "pathspec did not match any files" even
             # though the deletion is exactly what the user checked off to
             # commit. -A also considers removals for the given pathspec.
-            out, err, code = run_git(path, "add", "-A", "--", *safe_files)
+            if safe_files:
+                out, err, code = run_git(path, "add", "-A", "--", *safe_files)
+            else:
+                code = 0
         else:
             out, err, code = run_git(path, "add", "-A")
         if code != 0:
@@ -55,24 +62,27 @@ class GitCommitMixin:
         return result
 
     def _changed_paths(self, path):
-        """Paths git currently reports as changed (a rename by its new path),
-        or None if the status can't be read."""
+        """{path: needs `git add`} for what git currently reports as changed
+        (a rename by its new path), or None if the status can't be read.
+        A path needs adding unless its change is already all in the index."""
         out, _err, code = run_git(path, "status", "--porcelain=v2", "-z")
         if code != 0:
             return None
-        paths = set()
+        paths = {}
         entries = out.split("\0")
         i = 0
         while i < len(entries):
             e = entries[i]
             if e.startswith("? ") or e.startswith("! "):
-                paths.add(e[2:])
+                paths[e[2:]] = True
             elif e.startswith("1 "):
-                paths.add(e.split(" ", 8)[8])
+                parts = e.split(" ", 8)
+                paths[parts[8]] = parts[1][1] != "."  # worktree side changed
             elif e.startswith("u "):
-                paths.add(e.split(" ", 10)[10])
+                paths[e.split(" ", 10)[10]] = True
             elif e.startswith("2 "):
-                paths.add(e.split(" ", 9)[9])
+                parts = e.split(" ", 9)
+                paths[parts[9]] = parts[1][1] != "."
                 # Skip the rename's original path: it is already gone from the
                 # index and the working tree, `git add` would reject it too.
                 i += 1
