@@ -7214,7 +7214,102 @@ function installNativeWindowDrag() {
   root.addEventListener('mousedown', onDown)
 }
 
-function TitleBar() {
+// ---------------------------------------------------------------- tabs
+
+const DEFAULT_NAV = {
+  selectedPath: null,
+  selectedGroup: null,
+  hubiPageOpen: false,
+  listTab: 'groups',
+  groupSearch: '',
+  repoSearch: '',
+  repoGroupFilter: 'all',
+}
+
+function loadTabs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('devhub.tabs') || 'null')
+    if (Array.isArray(saved?.tabs) && saved.tabs.length) {
+      return saved.tabs
+        .filter((t) => t && t.id)
+        .map((t) => ({ id: t.id, nav: { ...DEFAULT_NAV, ...(t.nav || {}) } }))
+    }
+  } catch {
+    // ignore storage errors
+  }
+  return [{ id: 1, nav: DEFAULT_NAV }]
+}
+
+function loadActiveTab(tabs) {
+  try {
+    const saved = JSON.parse(localStorage.getItem('devhub.tabs') || 'null')
+    if (tabs.some((t) => t.id === saved?.active)) return saved.active
+  } catch {
+    // ignore storage errors
+  }
+  return tabs[0].id
+}
+
+// Windows File Explorer–style tabs, in the title bar: the active one opens
+// onto the page below, the others sit on the darker strip.
+function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
+  return (
+    <div className="flex h-full min-w-0 items-end gap-0 pl-2">
+      {tabs.map((t, i) => {
+        const active = t.id === activeId
+        const nextActive = tabs[i + 1]?.id === activeId
+        return (
+          <div
+            key={t.id}
+            role="tab"
+            aria-selected={active}
+            onMouseDown={(e) => {
+              if (e.button === 1) {
+                e.preventDefault()
+                onClose(t.id)
+              }
+            }}
+            onClick={() => onSelect(t.id)}
+            title={t.title}
+            className={`no-drag group relative flex h-[34px] min-w-[110px] max-w-[230px] flex-1 cursor-default items-center gap-2 rounded-t-lg pr-1.5 pl-3 text-[12.5px] transition-colors ${
+              active ? 'bg-base text-text' : 'text-muted hover:bg-white/[0.04] hover:text-text'
+            }`}
+          >
+            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded bg-accent text-white">
+              <IconLayers className="h-3 w-3" />
+            </span>
+            <span className="min-w-0 flex-1 truncate">{t.title}</span>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onClose(t.id)
+              }}
+              title="Fermer l'onglet (Ctrl+W)"
+              className={`flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-white/10 hover:text-text ${
+                active ? '' : 'opacity-0 group-hover:opacity-100'
+              }`}
+            >
+              <IconClose className="h-3 w-3" />
+            </button>
+            {/* Thin separator between two inactive tabs, like Explorer. */}
+            {!active && !nextActive && i < tabs.length - 1 && (
+              <span className="absolute top-2 right-0 bottom-2 w-px bg-border-strong" />
+            )}
+          </div>
+        )
+      })}
+      <button
+        onClick={onNew}
+        title="Nouvel onglet (Ctrl+T)"
+        className="no-drag mb-[3px] ml-1 flex h-7 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-white/10 hover:text-text"
+      >
+        <IconPlus className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  )
+}
+
+function TitleBar({ children }) {
   const [maximized, setMaximized] = useState(false)
 
   async function toggleMaximize() {
@@ -7244,24 +7339,28 @@ function TitleBar() {
   }, [])
 
   return (
-    <div className="pywebview-drag-region flex h-8 shrink-0 items-center justify-end bg-base">
+    <div
+      className={`pywebview-drag-region flex shrink-0 items-center ${children ? 'h-10' : 'h-8 bg-base'}`}
+      style={children ? { background: 'color-mix(in srgb, var(--color-base) 62%, #000)' } : undefined}
+    >
+      <div className="flex h-full min-w-0 flex-1 items-end">{children}</div>
       <button
         onClick={() => api()?.minimize_window()}
-        className="flex h-8 w-11 cursor-pointer items-center justify-center text-muted hover:bg-surface-hover hover:text-text"
+        className="flex h-8 w-11 shrink-0 self-start cursor-pointer items-center justify-center text-muted hover:bg-surface-hover hover:text-text"
         title="Réduire"
       >
         <IconWinMinimize className="h-3 w-3" />
       </button>
       <button
         onClick={toggleMaximize}
-        className="flex h-8 w-11 cursor-pointer items-center justify-center text-muted hover:bg-surface-hover hover:text-text"
+        className="flex h-8 w-11 shrink-0 self-start cursor-pointer items-center justify-center text-muted hover:bg-surface-hover hover:text-text"
         title={maximized ? 'Restaurer' : 'Agrandir'}
       >
         {maximized ? <IconWinRestore className="h-3 w-3" /> : <IconWinMaximize className="h-3 w-3" />}
       </button>
       <button
         onClick={() => api()?.close_window()}
-        className="flex h-8 w-11 cursor-pointer items-center justify-center text-muted hover:bg-danger hover:text-white"
+        className="flex h-8 w-11 shrink-0 self-start cursor-pointer items-center justify-center text-muted hover:bg-danger hover:text-white"
         title="Fermer"
       >
         <IconClose className="h-3.5 w-3.5" />
@@ -7437,12 +7536,91 @@ export default function App() {
     }
   }, [zoom])
 
-  const [selectedPath, setSelectedPath] = useState(null)
-  const [selectedGroup, setSelectedGroup] = useState(null)
-  const [listTab, setListTab] = useState('groups')
-  const [groupSearch, setGroupSearch] = useState('')
-  const [repoSearch, setRepoSearch] = useState('')
-  const [repoGroupFilter, setRepoGroupFilter] = useState('all')
+  // Explorer-style tabs: each tab is a whole Dev Hub with its own navigation
+  // (home lists, a group, a project, the Hubi page). The App-level names below
+  // are the *active* tab's values and setters, so everything that navigated
+  // before (search, Hubi tasks, Processus…) now navigates the active tab.
+  const [tabs, setTabs] = useState(loadTabs)
+  const [activeTabId, setActiveTabId] = useState(() => loadActiveTab(tabs))
+  const activeTabRef = useRef(activeTabId)
+  activeTabRef.current = activeTabId
+  const activeNav = tabs.find((t) => t.id === activeTabId)?.nav || DEFAULT_NAV
+  const setNav = useCallback((patch) => {
+    setTabs((list) =>
+      list.map((t) => {
+        if (t.id !== activeTabRef.current) return t
+        const changes = typeof patch === 'function' ? patch(t.nav) : patch
+        return { ...t, nav: { ...t.nav, ...changes } }
+      }),
+    )
+  }, [])
+  const navSetter = (key, extra) => (value) =>
+    setNav((nav) => ({ [key]: typeof value === 'function' ? value(nav[key]) : value, ...(extra ? extra(value) : {}) }))
+  const { selectedPath, selectedGroup, listTab, groupSearch, repoSearch, repoGroupFilter, hubiPageOpen } = activeNav
+  // Opening a project or a group leaves the Hubi page of that tab.
+  const setSelectedPath = navSetter('selectedPath', (v) => (v ? { hubiPageOpen: false } : null))
+  const setSelectedGroup = navSetter('selectedGroup', (v) => (v ? { hubiPageOpen: false } : null))
+  const setListTab = navSetter('listTab')
+  const setGroupSearch = navSetter('groupSearch')
+  const setRepoSearch = navSetter('repoSearch')
+  const setRepoGroupFilter = navSetter('repoGroupFilter')
+  const setHubiPageOpen = navSetter('hubiPageOpen')
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('devhub.tabs', JSON.stringify({ tabs, active: activeTabId }))
+    } catch {
+      // ignore storage errors
+    }
+  }, [tabs, activeTabId])
+
+  function newTab() {
+    const id = Date.now()
+    setTabs((list) => [...list, { id, nav: DEFAULT_NAV }])
+    setActiveTabId(id)
+  }
+
+  function closeTab(id) {
+    setTabs((list) => {
+      if (list.length === 1) return [{ id: list[0].id, nav: DEFAULT_NAV }] // last tab: back home
+      const i = list.findIndex((t) => t.id === id)
+      const next = list.filter((t) => t.id !== id)
+      if (id === activeTabRef.current) setActiveTabId(next[Math.min(i, next.length - 1)].id)
+      return next
+    })
+  }
+
+  useEffect(() => {
+    function onKey(e) {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+      const key = e.key.toLowerCase()
+      if (key === 't' && !e.shiftKey) {
+        e.preventDefault()
+        newTab()
+      } else if (key === 'w' && !e.shiftKey) {
+        e.preventDefault()
+        closeTab(activeTabRef.current)
+      } else if (key === 'tab') {
+        e.preventDefault()
+        setTabs((list) => {
+          const i = list.findIndex((t) => t.id === activeTabRef.current)
+          const next = list[(i + (e.shiftKey ? list.length - 1 : 1)) % list.length]
+          setActiveTabId(next.id)
+          return list
+        })
+      } else if (/^[1-9]$/.test(e.key)) {
+        e.preventDefault()
+        setTabs((list) => {
+          const target = e.key === '9' ? list[list.length - 1] : list[Number(e.key) - 1]
+          if (target) setActiveTabId(target.id)
+          return list
+        })
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [repoSelection, setRepoSelection] = useState(() => new Set())
 
   function toggleRepoSelection(path) {
@@ -7503,11 +7681,6 @@ export default function App() {
     window.addEventListener('focus', refreshHubi)
     return () => window.removeEventListener('focus', refreshHubi)
   }, [refreshHubi])
-  // The Hubi page takes the main area, like a project page.
-  const [hubiPageOpen, setHubiPageOpen] = useState(false)
-  useEffect(() => {
-    if (selectedPath || selectedGroup) setHubiPageOpen(false)
-  }, [selectedPath, selectedGroup])
   const [hubiTimerOpen, setHubiTimerOpen] = useState(false)
   const [hubiTasksOpen, setHubiTasksOpen] = useState(false)
   // A Hubi task sent to Claude: RepoDetail opens its IA tab, AiSessionsPanel
@@ -7900,280 +8073,41 @@ export default function App() {
     setOrphanAlert(null)
   }
 
-  const selectedRepo = repos.find((r) => r.path === selectedPath) || null
-  const showList = ready && !selectedRepo && !selectedGroup && !hubiPageOpen
-  const filteredGroups = groups.filter((g) => g.name.toLowerCase().includes(groupSearch.trim().toLowerCase()))
   const groupByPath = {}
   groups.forEach((g) => (g.repos || []).forEach((p) => { groupByPath[p] = g.name }))
-  const filteredRepos = repos.filter((r) => {
-    const matchesSearch = `${r.name} ${r.path}`.toLowerCase().includes(repoSearch.trim().toLowerCase())
-    if (!matchesSearch) return false
-    if (repoGroupFilter === 'all') return true
-    if (repoGroupFilter === 'ungrouped') return !groupByPath[r.path]
-    return groupByPath[r.path] === repoGroupFilter
-  })
+  function viewOf(nav) {
+    const repo = repos.find((r) => r.path === nav.selectedPath) || null
+    return {
+      selectedRepo: repo,
+      showList: ready && !repo && !nav.selectedGroup && !nav.hubiPageOpen,
+      filteredGroups: groups.filter((g) => g.name.toLowerCase().includes(nav.groupSearch.trim().toLowerCase())),
+      filteredRepos: repos.filter((r) => {
+        const matchesSearch = `${r.name} ${r.path}`.toLowerCase().includes(nav.repoSearch.trim().toLowerCase())
+        if (!matchesSearch) return false
+        if (nav.repoGroupFilter === 'all') return true
+        if (nav.repoGroupFilter === 'ungrouped') return !groupByPath[r.path]
+        return groupByPath[r.path] === nav.repoGroupFilter
+      }),
+    }
+  }
+  const { selectedRepo, showList } = viewOf(activeNav)
 
-  return (
-    <div className="flex h-screen flex-col overflow-hidden bg-base text-text">
-      {!appFullscreen && <TitleBar />}
-      <SplashScreen ready={ready} />
-      {!appFullscreen && (
-      <header className="pywebview-drag-region flex shrink-0 items-center justify-between gap-4 overflow-x-auto border-b border-border px-6 py-4">
-        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-white">
-            <IconLayers className="h-4 w-4" />
-          </span>
-          <h1 className="text-[15px] font-semibold tracking-tight">Dev Hub</h1>
-        </div>
-        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
-          <Button variant="subtle" onClick={() => setGlobalSearchOpen(true)}>
-            <IconSearch className="h-3.5 w-3.5" />
-            Rechercher
-            <span className="ml-1 rounded border border-border px-1 font-mono text-[10px] text-muted">Ctrl K</span>
-          </Button>
-          <button
-            onClick={() => {
-              refreshHubi()
-              setHubiPageOpen(true)
-            }}
-            title={hubi.running ? 'Hubi (en marche)' : 'Hubi (arrêté)'}
-            className="relative flex h-7 w-9 cursor-pointer items-center justify-center rounded-md border border-border hover:border-border-strong"
-          >
-            <img
-              src="/hubi/hubi-icon.png"
-              alt="Hubi"
-              className={`h-4 w-6 object-contain transition-all ${hubi.running ? '' : 'opacity-50 grayscale'}`}
-            />
-            {hubi.running && <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full border border-surface bg-success" />}
-          </button>
-          <button
-            onClick={() => setShortcutsOpen(true)}
-            title="Raccourcis clavier (Ctrl H)"
-            className="flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted hover:text-text hover:border-border-strong cursor-pointer"
-          >
-            ?
-          </button>
-          <ToolsMenu
-            badge={runningPaths.size}
-            footer={
-              <div className="flex items-center justify-between gap-3">
-                <span className="text-[12px] text-muted">Zoom</span>
-                <ZoomControl zoom={zoom} onChange={setZoom} />
-              </div>
-            }
-            items={[
-              {
-                label: 'Processus',
-                icon: <IconMonitor className="h-3.5 w-3.5" />,
-                badge: runningPaths.size,
-                onClick: () => {
-                  setProcessesOpen(true)
-                  setHasOpenedProcesses(true)
-                },
-              },
-              {
-                label: 'Navigateur',
-                icon: <IconExternal className="h-3.5 w-3.5" />,
-                onClick: () => openBrowserTab(null, 'Nouvel onglet'),
-              },
-              {
-                label: 'Journaux',
-                icon: <IconTerminal className="h-3.5 w-3.5" />,
-                onClick: () => setLogsOpen((v) => !v),
-              },
-              {
-                label: 'Paramètres IA',
-                icon: <IconSettings className="h-3.5 w-3.5" />,
-                onClick: () => setAiSettingsOpen(true),
-              },
-            ]}
-          />
-          {showList && (
-            <>
-              <Button
-                variant="subtle"
-                disabled={refreshing}
-                onClick={async () => {
-                  setRefreshing(true)
-                  const minDelay = new Promise((r) => setTimeout(r, 400))
-                  await Promise.all([refresh(), minDelay])
-                  setRefreshing(false)
-                }}
-                className="px-2"
-                title="Rafraîchir"
-              >
-                <IconRefresh className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              </Button>
-              <ToolsMenu
-                label="Ajouter"
-                variant="primary"
-                icon={<IconPlus className="h-3.5 w-3.5" />}
-                items={[
-                  {
-                    label: 'Ajouter un projet existant',
-                    icon: <IconFolder className="h-3.5 w-3.5" />,
-                    onClick: addRepo,
-                  },
-                  {
-                    label: 'Scanner un dossier',
-                    icon: <IconScan className="h-3.5 w-3.5" />,
-                    onClick: scanFolder,
-                  },
-                  {
-                    label: 'Créer un repo (GitHub / GitLab)',
-                    icon: <IconGitCommit className="h-3.5 w-3.5" />,
-                    onClick: () => setCreateRepoOpen(true),
-                  },
-                ]}
-              />
-            </>
-          )}
-          <ThemePicker mode={themeMode} onChange={setThemeMode} />
-        </div>
-      </header>
-      )}
+  function tabTitle(nav) {
+    if (nav.hubiPageOpen) return 'Hubi'
+    const repo = repos.find((r) => r.path === nav.selectedPath)
+    if (repo) return repo.name
+    if (nav.selectedGroup) return nav.selectedGroup
+    return 'Accueil'
+  }
 
-
-      {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
-      {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
-      {hubiTimerOpen && (
-        <HubiTimerModal
-          onClose={() => setHubiTimerOpen(false)}
-          onNotify={notify}
-          onStarted={() => setTimeout(refreshHubi, 1500)}
-        />
-      )}
-      {hubiTasksOpen && (
-        <HubiTasksModal
-          repos={repos}
-          onClose={() => setHubiTasksOpen(false)}
-          onNotify={notify}
-          onLaunch={(task, sessionId) => {
-            setHubiTasksOpen(false)
-            setHubiPageOpen(false)
-            setSelectedPath(task.project)
-            setTaskLaunch({ path: task.project, sessionId, prompt: task.text, nonce: Date.now() })
-          }}
-        />
-      )}
-      {createRepoOpen && (
-        <CreateRepoModal onClose={() => setCreateRepoOpen(false)} onNotify={notify} onCreated={refresh} />
-      )}
-      {globalSearchOpen && (
-        <GlobalSearchModal
-          onClose={() => setGlobalSearchOpen(false)}
-          onOpenRepo={(path) => {
-            setSelectedPath(path)
-            setGlobalSearchOpen(false)
-          }}
-          onOpenFile={(repoPath, file) => {
-            const ide = repos.find((r) => r.path === repoPath)?.ide
-            openIde(`${repoPath}/${file}`, ide)
-            setGlobalSearchOpen(false)
-          }}
-        />
-      )}
-      {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
-      {confirmDialog && (
-        <ConfirmModal
-          title={confirmDialog.title}
-          message={confirmDialog.message}
-          confirmLabel={confirmDialog.confirmLabel}
-          onConfirm={confirmDialog.onConfirm}
-          onCancel={() => setConfirmDialog(null)}
-        />
-      )}
-      {hasOpenedProcesses && (
-        <div className={processesOpen ? '' : 'hidden'}>
-          <ProcessesPanel
-            tabs={tabOrder
-              .filter((key) => runningPaths.has(key) && runningMeta[key])
-              .map((key) => ({ path: key, ...runningMeta[key] }))}
-            activeTab={activeProcessTab}
-            onSelectTab={setActiveProcessTab}
-            runningPaths={runningPaths}
-            onStop={stopRun}
-            onStopAll={() => stopAllFor(null)}
-            onClose={() => setProcessesOpen(false)}
-            onNotify={notify}
-            urls={processUrls}
-            onUrlChange={setProcessUrl}
-            onReorderTabs={setTabOrder}
-            themeMode={themeMode}
-            onThemeChange={setThemeMode}
-            appFullscreen={appFullscreen}
-            lockedUrlKeys={lockedUrlKeysRef.current}
-            onOpenBrowserTab={openBrowserTab}
-          />
-        </div>
-      )}
-
-      {orphanAlert && orphanAlert.length > 0 && (
-        <div className="mx-6 mt-4 flex items-center justify-between rounded-lg bg-danger-bg px-3 py-2 text-xs text-danger">
-          <span>
-            {orphanAlert.length} process orphelin{orphanAlert.length > 1 ? 's' : ''} détecté
-            {orphanAlert.length > 1 ? 's' : ''} (session précédente) — {orphanAlert.map((o) => o.repo_name).join(', ')}
-          </span>
-          <div className="flex items-center gap-2">
-            <Button variant="danger" onClick={killAllOrphans}>
-              Tuer tous
-            </Button>
-            <button onClick={() => setOrphanAlert(null)} className="text-danger hover:opacity-70 cursor-pointer">
-              <IconClose className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {updateInfo && (
-        <div className="mx-6 mt-4 flex items-center justify-between rounded-lg bg-accent-bg px-3 py-2 text-xs text-accent">
-          <span>
-            Nouvelle version disponible : {updateInfo.latest_version} (actuelle : {updateInfo.current_version})
-          </span>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="primary"
-              onClick={async () => {
-                const r = await api().open_external(updateInfo.url)
-                if (!r?.ok) notify(`Échec de l'ouverture : ${r?.error}`, true)
-              }}
-            >
-              Télécharger
-            </Button>
-            <button onClick={() => setUpdateInfo(null)} className="text-accent hover:opacity-70 cursor-pointer">
-              <IconClose className="h-3.5 w-3.5" />
-            </button>
-          </div>
-        </div>
-      )}
-
-      {toasts.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
-          {toasts.map((t) => (
-            <div
-              key={t.id}
-              onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
-              className={`flex w-80 cursor-pointer items-start gap-2 rounded-lg border px-3 py-2.5 text-xs shadow-lg backdrop-blur-sm ${
-                t.isError
-                  ? 'border-danger/30 bg-danger-bg text-danger'
-                  : 'border-success/30 bg-success-bg text-success'
-              }`}
-            >
-              {t.isError ? (
-                <IconAlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              ) : (
-                <IconCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              )}
-              <span className="min-w-0 break-words">{t.text}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      <main className="flex-1 overflow-y-auto p-6">
-        {refreshing && <PageSkeleton />}
-        {/* Hidden, not unmounted, while refreshing: keeps tab/filter state. */}
-        <div className={refreshing ? 'hidden' : 'contents'}>
+  // One tab's page. Called as a plain function (not a component) so React
+  // keeps each tab's subtree — and its state — across renders.
+  function renderWorkspace(nav) {
+    // eslint-disable-next-line no-unused-vars
+    const { selectedPath, selectedGroup, hubiPageOpen, listTab, groupSearch, repoSearch, repoGroupFilter } = nav
+    const { selectedRepo, showList, filteredGroups, filteredRepos } = viewOf(nav)
+    return (
+      <>
         {hubiPageOpen && (
           <HubiPage
             hubi={hubi}
@@ -8454,7 +8388,290 @@ export default function App() {
             taskLaunch={taskLaunch}
           />
         )}
+      </>
+    )
+  }
+
+  return (
+    <div className="flex h-screen flex-col overflow-hidden bg-base text-text">
+      {!appFullscreen && (
+        <TitleBar>
+          <TabStrip
+            tabs={tabs.map((t) => ({ id: t.id, title: tabTitle(t.nav) }))}
+            activeId={activeTabId}
+            onSelect={setActiveTabId}
+            onClose={closeTab}
+            onNew={newTab}
+          />
+        </TitleBar>
+      )}
+      <SplashScreen ready={ready} />
+      {!appFullscreen && (
+      <header className="pywebview-drag-region flex shrink-0 items-center justify-between gap-4 overflow-x-auto border-b border-border px-6 py-4">
+        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-white">
+            <IconLayers className="h-4 w-4" />
+          </span>
+          <h1 className="text-[15px] font-semibold tracking-tight">Dev Hub</h1>
         </div>
+        <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
+          <Button variant="subtle" onClick={() => setGlobalSearchOpen(true)}>
+            <IconSearch className="h-3.5 w-3.5" />
+            Rechercher
+            <span className="ml-1 rounded border border-border px-1 font-mono text-[10px] text-muted">Ctrl K</span>
+          </Button>
+          <button
+            onClick={() => {
+              refreshHubi()
+              setHubiPageOpen(true)
+            }}
+            title={hubi.running ? 'Hubi (en marche)' : 'Hubi (arrêté)'}
+            className="relative flex h-7 w-9 cursor-pointer items-center justify-center rounded-md border border-border hover:border-border-strong"
+          >
+            <img
+              src="/hubi/hubi-icon.png"
+              alt="Hubi"
+              className={`h-4 w-6 object-contain transition-all ${hubi.running ? '' : 'opacity-50 grayscale'}`}
+            />
+            {hubi.running && <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full border border-surface bg-success" />}
+          </button>
+          <button
+            onClick={() => setShortcutsOpen(true)}
+            title="Raccourcis clavier (Ctrl H)"
+            className="flex h-7 w-7 items-center justify-center rounded-md border border-border text-muted hover:text-text hover:border-border-strong cursor-pointer"
+          >
+            ?
+          </button>
+          <ToolsMenu
+            badge={runningPaths.size}
+            footer={
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[12px] text-muted">Zoom</span>
+                <ZoomControl zoom={zoom} onChange={setZoom} />
+              </div>
+            }
+            items={[
+              {
+                label: 'Processus',
+                icon: <IconMonitor className="h-3.5 w-3.5" />,
+                badge: runningPaths.size,
+                onClick: () => {
+                  setProcessesOpen(true)
+                  setHasOpenedProcesses(true)
+                },
+              },
+              {
+                label: 'Navigateur',
+                icon: <IconExternal className="h-3.5 w-3.5" />,
+                onClick: () => openBrowserTab(null, 'Nouvel onglet'),
+              },
+              {
+                label: 'Journaux',
+                icon: <IconTerminal className="h-3.5 w-3.5" />,
+                onClick: () => setLogsOpen((v) => !v),
+              },
+              {
+                label: 'Paramètres IA',
+                icon: <IconSettings className="h-3.5 w-3.5" />,
+                onClick: () => setAiSettingsOpen(true),
+              },
+            ]}
+          />
+          {showList && (
+            <>
+              <Button
+                variant="subtle"
+                disabled={refreshing}
+                onClick={async () => {
+                  setRefreshing(true)
+                  const minDelay = new Promise((r) => setTimeout(r, 400))
+                  await Promise.all([refresh(), minDelay])
+                  setRefreshing(false)
+                }}
+                className="px-2"
+                title="Rafraîchir"
+              >
+                <IconRefresh className={`h-3.5 w-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              </Button>
+              <ToolsMenu
+                label="Ajouter"
+                variant="primary"
+                icon={<IconPlus className="h-3.5 w-3.5" />}
+                items={[
+                  {
+                    label: 'Ajouter un projet existant',
+                    icon: <IconFolder className="h-3.5 w-3.5" />,
+                    onClick: addRepo,
+                  },
+                  {
+                    label: 'Scanner un dossier',
+                    icon: <IconScan className="h-3.5 w-3.5" />,
+                    onClick: scanFolder,
+                  },
+                  {
+                    label: 'Créer un repo (GitHub / GitLab)',
+                    icon: <IconGitCommit className="h-3.5 w-3.5" />,
+                    onClick: () => setCreateRepoOpen(true),
+                  },
+                ]}
+              />
+            </>
+          )}
+          <ThemePicker mode={themeMode} onChange={setThemeMode} />
+        </div>
+      </header>
+      )}
+
+
+      {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
+      {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
+      {hubiTimerOpen && (
+        <HubiTimerModal
+          onClose={() => setHubiTimerOpen(false)}
+          onNotify={notify}
+          onStarted={() => setTimeout(refreshHubi, 1500)}
+        />
+      )}
+      {hubiTasksOpen && (
+        <HubiTasksModal
+          repos={repos}
+          onClose={() => setHubiTasksOpen(false)}
+          onNotify={notify}
+          onLaunch={(task, sessionId) => {
+            setHubiTasksOpen(false)
+            setHubiPageOpen(false)
+            setSelectedPath(task.project)
+            setTaskLaunch({ path: task.project, sessionId, prompt: task.text, nonce: Date.now() })
+          }}
+        />
+      )}
+      {createRepoOpen && (
+        <CreateRepoModal onClose={() => setCreateRepoOpen(false)} onNotify={notify} onCreated={refresh} />
+      )}
+      {globalSearchOpen && (
+        <GlobalSearchModal
+          onClose={() => setGlobalSearchOpen(false)}
+          onOpenRepo={(path) => {
+            setSelectedPath(path)
+            setGlobalSearchOpen(false)
+          }}
+          onOpenFile={(repoPath, file) => {
+            const ide = repos.find((r) => r.path === repoPath)?.ide
+            openIde(`${repoPath}/${file}`, ide)
+            setGlobalSearchOpen(false)
+          }}
+        />
+      )}
+      {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+      {confirmDialog && (
+        <ConfirmModal
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
+      {hasOpenedProcesses && (
+        <div className={processesOpen ? '' : 'hidden'}>
+          <ProcessesPanel
+            tabs={tabOrder
+              .filter((key) => runningPaths.has(key) && runningMeta[key])
+              .map((key) => ({ path: key, ...runningMeta[key] }))}
+            activeTab={activeProcessTab}
+            onSelectTab={setActiveProcessTab}
+            runningPaths={runningPaths}
+            onStop={stopRun}
+            onStopAll={() => stopAllFor(null)}
+            onClose={() => setProcessesOpen(false)}
+            onNotify={notify}
+            urls={processUrls}
+            onUrlChange={setProcessUrl}
+            onReorderTabs={setTabOrder}
+            themeMode={themeMode}
+            onThemeChange={setThemeMode}
+            appFullscreen={appFullscreen}
+            lockedUrlKeys={lockedUrlKeysRef.current}
+            onOpenBrowserTab={openBrowserTab}
+          />
+        </div>
+      )}
+
+      {orphanAlert && orphanAlert.length > 0 && (
+        <div className="mx-6 mt-4 flex items-center justify-between rounded-lg bg-danger-bg px-3 py-2 text-xs text-danger">
+          <span>
+            {orphanAlert.length} process orphelin{orphanAlert.length > 1 ? 's' : ''} détecté
+            {orphanAlert.length > 1 ? 's' : ''} (session précédente) — {orphanAlert.map((o) => o.repo_name).join(', ')}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button variant="danger" onClick={killAllOrphans}>
+              Tuer tous
+            </Button>
+            <button onClick={() => setOrphanAlert(null)} className="text-danger hover:opacity-70 cursor-pointer">
+              <IconClose className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {updateInfo && (
+        <div className="mx-6 mt-4 flex items-center justify-between rounded-lg bg-accent-bg px-3 py-2 text-xs text-accent">
+          <span>
+            Nouvelle version disponible : {updateInfo.latest_version} (actuelle : {updateInfo.current_version})
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="primary"
+              onClick={async () => {
+                const r = await api().open_external(updateInfo.url)
+                if (!r?.ok) notify(`Échec de l'ouverture : ${r?.error}`, true)
+              }}
+            >
+              Télécharger
+            </Button>
+            <button onClick={() => setUpdateInfo(null)} className="text-accent hover:opacity-70 cursor-pointer">
+              <IconClose className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2">
+          {toasts.map((t) => (
+            <div
+              key={t.id}
+              onClick={() => setToasts((prev) => prev.filter((x) => x.id !== t.id))}
+              className={`flex w-80 cursor-pointer items-start gap-2 rounded-lg border px-3 py-2.5 text-xs shadow-lg backdrop-blur-sm ${
+                t.isError
+                  ? 'border-danger/30 bg-danger-bg text-danger'
+                  : 'border-success/30 bg-success-bg text-success'
+              }`}
+            >
+              {t.isError ? (
+                <IconAlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              ) : (
+                <IconCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              )}
+              <span className="min-w-0 break-words">{t.text}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        {/* Every tab stays mounted (hidden when inactive) so it keeps its own
+            state: project sub-tab, open file, logs, scroll position. */}
+        {tabs.map((t) => {
+          const isActive = t.id === activeTabId
+          return (
+            <div key={t.id} className={isActive ? 'min-h-0 flex-1 overflow-y-auto p-6' : 'hidden'}>
+              {isActive && refreshing && <PageSkeleton />}
+              {/* Hidden, not unmounted, while refreshing: keeps tab/filter state. */}
+              <div className={isActive && refreshing ? 'hidden' : 'contents'}>{renderWorkspace(t.nav)}</div>
+            </div>
+          )
+        })}
       </main>
     </div>
   )
