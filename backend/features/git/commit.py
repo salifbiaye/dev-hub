@@ -16,6 +16,7 @@ COMMIT_LANGUAGE_NAMES = {
 
 class GitCommitMixin:
     def commit(self, path, message, files=None):
+        current = None
         if not message:
             return {"error": "Message de commit vide"}
         # An explicit file selection stages only those paths, so files left
@@ -25,6 +26,16 @@ class GitCommitMixin:
             safe_files = [f for f in files if safe_repo_file(path, f)]
             if not safe_files:
                 return {"error": "Aucun fichier valide sélectionné"}
+            # The selection comes from the status shown when the panel was
+            # opened: a file that has since lost its changes or vanished (a new
+            # file deleted meanwhile, by a Claude session for instance) matches
+            # nothing and git rejects the whole commit. Keep what still changed.
+            current = self._changed_paths(path)
+            if current is not None:
+                skipped = [f for f in safe_files if f not in current]
+                safe_files = [f for f in safe_files if f in current]
+                if not safe_files:
+                    return {"error": "Les fichiers sélectionnés n'ont plus de changements à committer"}
             # Plain `git add -- <path>` only picks up new/modified content in
             # the working tree — a path that's been deleted matches nothing
             # there, so it fails with "pathspec did not match any files" even
@@ -38,7 +49,35 @@ class GitCommitMixin:
         out, err, code = run_git(path, "commit", "-m", message)
         if code != 0:
             return {"error": err or out}
-        return {"ok": True}
+        result = {"ok": True}
+        if files and current is not None and skipped:
+            result["skipped"] = skipped
+        return result
+
+    def _changed_paths(self, path):
+        """Paths git currently reports as changed (a rename by its new path),
+        or None if the status can't be read."""
+        out, _err, code = run_git(path, "status", "--porcelain=v2", "-z")
+        if code != 0:
+            return None
+        paths = set()
+        entries = out.split("\0")
+        i = 0
+        while i < len(entries):
+            e = entries[i]
+            if e.startswith("? ") or e.startswith("! "):
+                paths.add(e[2:])
+            elif e.startswith("1 "):
+                paths.add(e.split(" ", 8)[8])
+            elif e.startswith("u "):
+                paths.add(e.split(" ", 10)[10])
+            elif e.startswith("2 "):
+                paths.add(e.split(" ", 9)[9])
+                # Skip the rename's original path: it is already gone from the
+                # index and the working tree, `git add` would reject it too.
+                i += 1
+            i += 1
+        return paths
 
     def list_cli_tools(self):
         # Same "only show what's actually there" principle as list_ides,

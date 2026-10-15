@@ -5233,7 +5233,10 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
     try {
       const result = await action()
       if (result?.error) onNotify(`${label} : ${result.error}`, true)
-      else onNotify(`${label} OK`)
+      else if (result?.skipped?.length) {
+        const n = result.skipped.length
+        onNotify(`${label} OK — ${n} fichier${n > 1 ? 's' : ''} ignoré${n > 1 ? 's' : ''} (plus de changements) : ${result.skipped.map((f) => f.split('/').pop()).join(', ')}`)
+      } else onNotify(`${label} OK`)
       await loadAll()
     } finally {
       setBusy(false)
