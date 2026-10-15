@@ -10,6 +10,7 @@ import icons
 from api import Api
 from app_config import load_config
 from core.server.static_server import serve_own_ui
+from core.ui_files import clean_stale_unpack_dirs, ui_dist_dir
 from features.hubi import api as hubi_api
 from features.hubi import process as hubi_process
 from features.window_chrome.controls import kill_all_running, start_fullscreen_watch
@@ -52,15 +53,16 @@ os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", _PROXY_BYPASS_ARG
 
 def main():
     api = Api()
+    if getattr(sys, "frozen", False):
+        # Leftover unpack folders of force-killed runs (see core/ui_files.py).
+        threading.Thread(target=clean_stale_unpack_dirs, daemon=True).start()
     dev_url = os.environ.get("DEV_HUB_DEV_URL")
     if dev_url:
         target = dev_url
         ui_base = dev_url.rstrip("/")
         browser_window.set_own_ui_base(ui_base)
     else:
-        base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent.parent
-        dist_dir = base / "frontend" / "dist"
-        own_port = serve_own_ui(dist_dir)
+        own_port = serve_own_ui(ui_dist_dir())
         # "localhost", not the literal 127.0.0.1 it resolves to — the two
         # are different *sites* to Chromium's cookie/storage partitioning
         # even though they're the same machine, so a previewed dev server
@@ -122,11 +124,6 @@ def main():
     webview.start()
 
 
-def _ui_dist_dir():
-    base = Path(sys._MEIPASS) if getattr(sys, "frozen", False) else Path(__file__).parent.parent
-    return base / "frontend" / "dist"
-
-
 def main_hubi():
     """`DevHub.exe --hubi`: only Hubi (eyes + tray icon), no Dev Hub window.
     Its own process — see features/hubi/process.py."""
@@ -147,7 +144,7 @@ def main_hubi():
         # Hubi. Same base arguments as Dev Hub (proxy bypass, no occlusion).
         os.environ["WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS"] = _PROXY_BYPASS_ARG + " --autoplay-policy=no-user-gesture-required"
     try:
-        port = serve_own_ui(_ui_dist_dir())
+        port = serve_own_ui(ui_dist_dir())
         hubi_api.start(f"http://localhost:{port}")
         webview.start()
         hubi_api.stop()

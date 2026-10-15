@@ -46,7 +46,9 @@ def _mascot_png():
     from pathlib import Path
 
     if getattr(sys, "frozen", False):
-        roots = [Path(sys._MEIPASS) / "frontend" / "dist"]
+        from core.ui_files import ui_dist_dir
+
+        roots = [ui_dist_dir()]
     else:
         front = Path(__file__).resolve().parents[3] / "frontend"
         roots = [front / "public", front / "dist"]
