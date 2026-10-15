@@ -88,8 +88,8 @@ Un petit compagnon qui flotte dans un coin de l'écran, toujours au-dessus, sans
 
 ## Stack technique
 
-- **Backend** : Python + [pywebview](https://pywebview.flowrl.com/) (fenêtre native via WebView2), [pywinpty](https://github.com/andfoy/pywinpty) pour le terminal intégré, psycopg2 / pymysql / pymongo pour les bases de données
-- **Frontend** : React + Vite + Tailwind CSS v4, [xterm.js](https://xtermjs.org/) pour le terminal
+- **Backend** : Python + [pywebview](https://pywebview.flowrl.com/) (fenêtre native via WebView2), [pywinpty](https://github.com/andfoy/pywinpty) pour le terminal intégré, psycopg2 / pymysql / pymongo pour les bases de données, psutil, pystray (icône de Hubi) ; API Windows appelées en ctypes (DWM, DirectComposition, bureaux virtuels)
+- **Frontend** : React + Vite + Tailwind CSS v4, [xterm.js](https://xtermjs.org/) pour le terminal, [marked](https://marked.js.org/) pour l'aperçu Markdown
 - **Stockage** : `config.json` local dans `%LOCALAPPDATA%\DevHub\` — pas de base de données pour l'app elle-même
 
 ## Démarrage (développement)
@@ -108,6 +108,9 @@ python -m venv .venv
 .venv\Scripts\pip install -r requirements.txt
 set DEV_HUB_DEV_URL=http://localhost:5173
 .venv\Scripts\python main.py
+
+# Hubi seul (son propre processus)
+.venv\Scripts\python main.py --hubi
 ```
 
 ## Build de l'exécutable
@@ -120,24 +123,41 @@ cd ../backend
 .venv\Scripts\python -m PyInstaller DevHub.spec --clean --noconfirm
 ```
 
-L'exécutable est généré dans `backend/dist/DevHub.exe`.
+L'exécutable est généré dans `backend/dist/DevHub.exe` (Hubi est dans le même exe : `DevHub.exe --hubi`).
+
+Pour publier une version : `./release.sh minor "notes"` (voir l'en-tête du script et `CHANGELOG.md`).
 
 ## Structure du projet
 
 ```
 dev-hub/
 ├── backend/
-│   ├── main.py              # Point d'entrée (crée la fenêtre, lance webview.start())
-│   ├── api.py                # Compose la classe Api (js_api) à partir des Mixins
+│   ├── main.py                 # Point d'entrée : fenêtre Dev Hub, ou Hubi seul avec --hubi
+│   ├── api.py                  # Compose la classe Api (js_api) à partir des Mixins
+│   ├── app_config.py           # Version, config.json (%LOCALAPPDATA%\DevHub), écriture atomique
 │   ├── core/
-│   │   ├── platform/          # Abstraction OS (clavier, PTY, focus fenêtre…) — windows/ et linux/
-│   │   └── server/             # Serveur HTTP local qui sert le frontend
-│   └── features/               # Un dossier par domaine : git, database, terminal,
-│                                 processes, ide, repos, repo_host, window_chrome, browser
-└── frontend/                   # Interface React + Tailwind
-    └── src/
-        ├── App.jsx
-        └── icons.jsx
+│   │   ├── platform/           # Abstraction OS — windows/ (snap, glisser natif, bureaux virtuels,
+│   │   │                       #   fenêtre transparente DirectComposition, raccourcis globaux, PTY…) et linux/
+│   │   ├── server/             # Serveur HTTP local qui sert le frontend
+│   │   └── ui_files.py         # Copie stable de l'interface + nettoyage des dossiers temporaires
+│   └── features/               # Un dossier par domaine : git, database, terminal, processes,
+│       │                       #   ide, repos, repo_host, window_chrome, browser
+│       └── hubi/               # Hubi : fenêtre, humeurs, icône de notification, tâches, minuteur,
+│                               #   suivi Claude Code (hooks + historiques) et Codex, barre rapide
+├── frontend/
+│   ├── src/
+│   │   ├── App.jsx             # Interface Dev Hub (onglets, projets, git, BDD, runs…)
+│   │   ├── codeEditor.jsx      # Éditeur et aperçu Markdown / HTML de l'onglet Code
+│   │   ├── hubiPanel.jsx       # Page Hubi
+│   │   ├── hubiTasks.jsx       # Fenêtre Tâches
+│   │   └── icons.jsx
+│   └── public/
+│       ├── hubi.html, hubi/    # Page de Hubi (dessin canvas : eyes.js, bulles/badges : hud.js)
+│       ├── hubi-quick.html     # Barre rapide Ctrl+Alt+H
+│       └── browser.html        # Navigateur intégré
+├── docs/                       # Notes de conception (Hubi) et images de la mascotte
+├── release.sh                  # Publie une release (version, build, push, release GitHub)
+└── CHANGELOG.md
 ```
 
 Voir [CROSS_PLATFORM.md](CROSS_PLATFORM.md) pour l'état du portage Linux (en cours, v1 simplifiée côté navigateur intégré, pas encore testée sur une vraie machine Linux).
