@@ -131,6 +131,11 @@ class PlatformService(ABC):
         """Bring the already running Dev Hub to the front."""
         return False
 
+    def overlay_set_form_visible(self, win, visible):
+        """Show/hide a pywebview window so its web view knows it (default:
+        the plain overlay_set_visible)."""
+        return self.overlay_set_visible(win, visible)
+
     def overlay_follow_desktops(self, win, enabled):
         """Keep the window on the virtual desktop being shown while
         `enabled()` is true. No-op where unsupported."""

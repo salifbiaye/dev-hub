@@ -239,6 +239,30 @@ def set_visible(win, visible):
     return True
 
 
+def set_form_visible(win, visible):
+    """Show/hide through WinForms itself (form.Show/Hide on its thread): unlike
+    a bare ShowWindow, this also tells WebView2 it is visible — otherwise a
+    window created hidden stays blank once shown."""
+    form = _form(win)
+    if form is None:
+        return set_visible(win, visible)
+    try:
+        from System import Func, Type
+
+        def _apply():
+            if visible:
+                form.Show()
+            else:
+                form.Hide()
+
+        form.Invoke(Func[Type](_apply))
+        if visible:
+            keep_on_top(win)
+        return True
+    except Exception:
+        return False
+
+
 def keep_on_top(win):
     hwnd = _hwnd(win)
     if hwnd:

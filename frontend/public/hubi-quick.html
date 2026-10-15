@@ -107,6 +107,7 @@
         const suggest = document.getElementById('suggest')
         let busy = false
         let focusedOnce = false
+        let shownAt = 0 // focus shuffles around while the bar appears
         let projects = []
         let matches = []
         let active = 0
@@ -116,10 +117,7 @@
         }
 
         // Couleurs du thème Dev Hub (instantané enregistré par Dev Hub).
-        async function init() {
-          const a = api()
-          if (!a) return
-          const t = (a.get_theme && (await a.get_theme())) || {}
+        function applyTheme(t) {
           const root = document.documentElement.style
           if (t.base) root.setProperty('--bg', t.base)
           if (t.surface) root.setProperty('--surface', t.surface)
@@ -127,7 +125,37 @@
           if (t.muted) root.setProperty('--muted', t.muted)
           if (t.accent) root.setProperty('--accent', t.accent)
           if (t.danger) root.setProperty('--danger', t.danger)
-          projects = (a.list_projects && (await a.list_projects())) || []
+        }
+
+        async function loadProjects() {
+          const a = api()
+          projects = (a && a.list_projects && (await a.list_projects())) || []
+        }
+
+        async function init() {
+          const a = api()
+          if (!a) return
+          applyTheme((a.get_theme && (await a.get_theme())) || {})
+          await loadProjects()
+        }
+
+        // The window is made once and kept hidden; Hubi calls this right
+        // before showing it (Ctrl+Alt+H): current theme, empty field.
+        window.quickReset = function (theme) {
+          applyTheme(theme || {})
+          input.value = ''
+          card.classList.remove('error')
+          busy = false
+          focusedOnce = false
+          shownAt = Date.now()
+          active = 0
+          matches = []
+          suggest.innerHTML = ''
+          suggest.classList.remove('open')
+          loadProjects()
+        }
+        window.quickFocus = function () {
+          input.focus()
         }
         if (api()) init()
         else window.addEventListener('pywebviewready', init, { once: true })
@@ -222,7 +250,7 @@
         })
         // Clic ailleurs : on referme, comme un lanceur.
         window.addEventListener('blur', function () {
-          if (focusedOnce) close()
+          if (focusedOnce && Date.now() - shownAt > 700) close()
         })
         input.focus()
       })()

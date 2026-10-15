@@ -15,28 +15,34 @@ _base_url = None
 _stop_hotkey = None
 _stop_escape = None
 _on_added = None
+_open = False  # the bar is on screen
+_ready = False  # its page has loaded
 
 
 def _close():
-    global _window
-    # Let pywebview deliver the js_api call's return value before the page goes.
+    """Hide the bar (kept alive for the next Ctrl+Alt+H)."""
+    global _open
+    # Let pywebview deliver the js_api call's return value first.
     time.sleep(0.15)
     with _lock:
-        win, _window = _window, None
+        was_open, _open = _open, False
+        win = _window
     _release_escape()
     platform_svc.hide_dim_overlay()
-    if win is not None:
-        try:
-            win.destroy()
-        except Exception:
-            pass
+    if was_open and win is not None:
+        platform_svc.overlay_set_form_visible(win, False)
 
 
 def _on_closed():
-    global _window
-    _window = None
+    global _window, _open, _ready
+    _window, _open, _ready = None, False, False
     _release_escape()
     platform_svc.hide_dim_overlay()
+
+
+def _on_loaded():
+    global _ready
+    _ready = True
 
 
 def _release_escape():
@@ -60,21 +66,38 @@ def _grab_focus_and_escape(win):
         time.sleep(0.08)
 
 
-def _on_shown():
-    # Launcher-style: centered horizontally, in the upper third of the screen.
-    win = _window
-    if win is None:
-        return
+def _theme():
+    from app_config import load_config
+
+    return load_config().get("theme_vars") or {}
+
+
+def _show(win):
+    """Ctrl+Alt+H on the pre-made bar: theme and empty field first, then
+    centered and shown — it appears instantly, already in the right colors."""
+    import json
+
     try:
-        sw, sh = platform_svc.overlay_screen()["primary"]
-        r = platform_svc.overlay_rect(win)
-        if r:
-            platform_svc.overlay_set_rect(win, (sw - r[2]) // 2, int(sh * 0.28))
+        win.evaluate_js(f"window.quickReset && window.quickReset({json.dumps(_theme())})")
     except Exception:
         pass
+    try:
+        s = platform_svc.overlay_dpi_scale(win)
+        w, h = int(round(460 * s)), int(round(76 * s))
+        sw, sh = platform_svc.overlay_screen()["primary"]
+        platform_svc.overlay_set_rect(win, (sw - w) // 2, int(sh * 0.28), w, h)
+    except Exception:
+        pass
+    # Through WinForms so WebView2 knows it is visible (a bare ShowWindow
+    # left the page unrendered, pywebview's show() ignores hidden windows).
+    platform_svc.overlay_set_form_visible(win, True)
     platform_svc.round_window_corners(win, (0x2A, 0x2A, 0x30))
     platform_svc.show_dim_overlay(win, on_click=lambda: threading.Thread(target=_close, daemon=True).start())
     _grab_focus_and_escape(win)
+    try:
+        win.evaluate_js("window.quickFocus && window.quickFocus()")
+    except Exception:
+        pass
 
 
 def _play_noting(task):
@@ -118,7 +141,7 @@ class QuickApi:
     def resize(self, css_height):
         """Grow/shrink the bar to fit its project suggestions (top edge fixed)."""
         win = _window
-        if win is None:
+        if win is None or not _open:
             return
         try:
             s = platform_svc.overlay_dpi_scale(win)
@@ -135,34 +158,55 @@ class QuickApi:
         return load_config().get("theme_vars") or {}
 
 
-def open_window():
+def _create(hidden):
     global _window
+    # Opaque like the eyes window: never mix transparent and opaque
+    # WebView2 windows in one process (that rendered windows solid black).
+    _window = webview.create_window(
+        "Hubi — nouvelle tâche",
+        f"{_base_url}/hubi-quick.html",
+        js_api=QuickApi(),
+        width=460,
+        height=76,
+        # Off-screen until _show() centers it.
+        x=-4000,
+        y=-4000,
+        frameless=True,
+        easy_drag=True,
+        shadow=False,
+        focus=True,
+        on_top=True,
+        hidden=hidden,
+        # The card fills the window; Windows 11 rounds the window itself.
+        resizable=False,
+        background_color="#0b0b0d",
+    )
+    _window.events.closed += _on_closed
+    _window.events.loaded += _on_loaded
+
+
+def preload():
+    """Make the (hidden) bar ahead of time: Ctrl+Alt+H then only shows it."""
     with _lock:
-        if _window is not None or _base_url is None:
+        if _window is None and _base_url is not None:
+            _create(hidden=True)
+
+
+def open_window():
+    global _open
+    with _lock:
+        if _open or _base_url is None:
             return
-        # Opaque like the eyes window: never mix transparent and opaque
-        # WebView2 windows in one process (that rendered windows solid black).
-        _window = webview.create_window(
-            "Hubi — nouvelle tâche",
-            f"{_base_url}/hubi-quick.html",
-            js_api=QuickApi(),
-            width=460,
-            height=76,
-            # Created off-screen: _on_shown() centers it, so it no longer
-            # flashes at pywebview's default spot on the left first.
-            x=-4000,
-            y=-4000,
-            frameless=True,
-            easy_drag=True,
-            shadow=False,
-            focus=True,
-            on_top=True,
-            # The card fills the window; Windows 11 rounds the window itself.
-            resizable=False,
-            background_color="#0b0b0d",
-        )
-        _window.events.closed += _on_closed
-        _window.events.shown += _on_shown
+        if _window is None:
+            _create(hidden=True)  # it was closed for good: make it again
+        _open = True
+        win = _window
+    # First press right after Hubi started: the page may still be loading.
+    for _ in range(40):
+        if _ready:
+            break
+        time.sleep(0.05)
+    _show(win)
 
 
 def start(base_url, on_added):
@@ -170,6 +214,7 @@ def start(base_url, on_added):
     global _base_url, _stop_hotkey, _on_added
     _base_url = base_url.rstrip("/")
     _on_added = on_added
+    preload()
     if _stop_hotkey is None:
         _stop_hotkey = platform_svc.start_global_hotkey(
             HOTKEY, lambda: threading.Thread(target=open_window, daemon=True).start()

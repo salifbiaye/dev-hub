@@ -151,6 +151,9 @@ class WindowsPlatform(base.PlatformService):
     def overlay_set_rect(self, win, x=None, y=None, w=None, h=None):
         return _overlay.set_rect(win, x, y, w, h)
 
+    def overlay_set_form_visible(self, win, visible):
+        return _overlay.set_form_visible(win, visible)
+
     def overlay_set_visible(self, win, visible):
         return _overlay.set_visible(win, visible)
 
