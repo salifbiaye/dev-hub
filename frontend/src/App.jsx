@@ -7264,7 +7264,9 @@ const TAB_BTN_HOVER = 'tab-btn-hover'
 
 // Windows File Explorer–style tabs, in the title bar: the active one opens
 // onto the page below, the others sit on the darker strip.
-function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
+function TabStrip({ tabs, activeId, onSelect, onClose, onNew, onMove }) {
+  // Drag a tab to reorder: the others make room live, as in Explorer.
+  const [draggingId, setDraggingId] = useState(null)
   const hover = TAB_HOVER
   const btnHover = TAB_BTN_HOVER
   return (
@@ -7277,6 +7279,20 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
             key={t.id}
             role="tab"
             aria-selected={active}
+            draggable
+            onDragStart={(e) => {
+              setDraggingId(t.id)
+              e.dataTransfer.effectAllowed = 'move'
+              e.dataTransfer.setData('text/plain', String(t.id))
+              onSelect(t.id)
+            }}
+            onDragOver={(e) => {
+              if (draggingId == null) return
+              e.preventDefault()
+              if (draggingId !== t.id) onMove(draggingId, t.id)
+            }}
+            onDrop={(e) => e.preventDefault()}
+            onDragEnd={() => setDraggingId(null)}
             onMouseDown={(e) => {
               if (e.button === 1) {
                 e.preventDefault()
@@ -7286,6 +7302,8 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
             onClick={() => onSelect(t.id)}
             title={t.title}
             className={`no-drag group relative flex h-[34px] min-w-[110px] max-w-[230px] flex-1 cursor-default items-center gap-2 rounded-t-lg pr-1.5 pl-3 text-[12.5px] transition-colors ${
+              draggingId === t.id ? 'opacity-70' : ''
+            } ${
               active ? 'bg-base text-text shadow-[0_-1px_0_0_var(--color-border)]' : `text-muted ${hover} hover:text-text`
             }`}
           >
@@ -8419,6 +8437,17 @@ export default function App() {
             onSelect={setActiveTabId}
             onClose={closeTab}
             onNew={newTab}
+            onMove={(fromId, toId) =>
+              setTabs((list) => {
+                const from = list.findIndex((x) => x.id === fromId)
+                const to = list.findIndex((x) => x.id === toId)
+                if (from < 0 || to < 0 || from === to) return list
+                const next = [...list]
+                const [moved] = next.splice(from, 1)
+                next.splice(to, 0, moved)
+                return next
+              })
+            }
           />
         </TitleBar>
       )}
