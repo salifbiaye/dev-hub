@@ -7315,7 +7315,7 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew, onMove }) {
             }}
             onClick={() => onSelect(t.id)}
             title={t.title}
-            className={`no-drag group relative flex h-[34px] w-[230px] min-w-[46px] shrink cursor-default items-center gap-2 rounded-t-lg pr-1.5 pl-3 text-[12.5px] transition-colors ${
+            className={`no-drag group relative flex h-[34px] w-[230px] min-w-[76px] shrink cursor-default items-center gap-2 overflow-hidden rounded-t-lg pr-1.5 pl-3 text-[12.5px] transition-colors ${
               draggingId === t.id ? 'opacity-70' : ''
             } ${
               active ? 'bg-base text-text shadow-[0_-1px_0_0_var(--color-border)]' : `text-muted ${hover} hover:text-text`
