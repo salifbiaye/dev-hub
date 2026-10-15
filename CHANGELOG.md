@@ -6,6 +6,14 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.6.1] - 2026-10-15
+
+### ✨ Nouveautés
+- Dev Hub ne s'ouvre plus qu'une fois : le relancer ramène la fenêtre déjà ouverte au premier plan
+
+### 🐛 Corrections
+- Barre rapide de Hubi (Ctrl+Alt+H) : s'ouvre instantanément, directement au centre de l'écran et aux couleurs du thème (plus de passage par la gauche ni de flash d'un autre thème)
+
 ## [0.6.0] - 2026-10-15
 
 ### ✨ Nouveautés
