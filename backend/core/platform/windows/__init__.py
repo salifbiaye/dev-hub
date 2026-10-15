@@ -169,6 +169,16 @@ class WindowsPlatform(base.PlatformService):
         win = CompositionWindow(url, rect, api, user_data_dir, on_ready, on_closed)
         return win if win.start() else None
 
+    def claim_single_instance(self):
+        from . import single_instance
+
+        return single_instance.claim()
+
+    def focus_running_instance(self):
+        from . import single_instance
+
+        return single_instance.focus_running()
+
     def overlay_follow_desktops(self, win, enabled):
         from . import virtual_desktop
 

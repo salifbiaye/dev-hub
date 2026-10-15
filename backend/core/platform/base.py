@@ -123,6 +123,14 @@ class PlatformService(ABC):
         where unsupported (callers then fall back to the framed window)."""
         return None
 
+    def claim_single_instance(self):
+        """True if this is the only running Dev Hub (default: no check)."""
+        return True
+
+    def focus_running_instance(self):
+        """Bring the already running Dev Hub to the front."""
+        return False
+
     def overlay_follow_desktops(self, win, enabled):
         """Keep the window on the virtual desktop being shown while
         `enabled()` is true. No-op where unsupported."""

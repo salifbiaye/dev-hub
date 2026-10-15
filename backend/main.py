@@ -9,6 +9,7 @@ import webview
 import icons
 from api import Api
 from app_config import load_config
+from core.platform import platform_svc
 from core.server.static_server import serve_own_ui
 from core.ui_files import clean_stale_unpack_dirs, ui_dist_dir
 from features.hubi import api as hubi_api
@@ -52,6 +53,10 @@ os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", _PROXY_BYPASS_ARG
 
 
 def main():
+    # One Dev Hub at a time: launching it again shows the one already open.
+    if not platform_svc.claim_single_instance():
+        platform_svc.focus_running_instance()
+        return
     api = Api()
     if getattr(sys, "frozen", False):
         # Leftover unpack folders of force-killed runs (see core/ui_files.py).
