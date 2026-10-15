@@ -6096,6 +6096,7 @@ function OrphanScanner({ onNotify }) {
 // tabs: opening process B doesn't touch process A's window, both stay up
 // until closed.
 function ProcessesPanel({
+  topOffset = 0, // below the app's title bar (tabs), which stays usable
   tabs,
   activeTab,
   onSelectTab,
@@ -6129,8 +6130,7 @@ function ProcessesPanel({
 
   if (tabs.length === 0) {
     return (
-      <div className="fixed inset-0 z-30 flex flex-col bg-base">
-        <TitleBar />
+      <div className="fixed inset-x-0 bottom-0 z-30 flex flex-col bg-base" style={{ top: topOffset }}>
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">Processus</h2>
           <div className="flex items-center gap-2">
@@ -6149,10 +6149,9 @@ function ProcessesPanel({
   }
 
   return (
-    <div className="fixed inset-0 z-30 flex flex-col bg-base">
+    <div className="fixed inset-x-0 bottom-0 z-30 flex flex-col bg-base" style={{ top: topOffset }}>
       {!appFullscreen && (
       <>
-      <TitleBar />
       <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <div ref={tabsScroll.ref} onScroll={tabsScroll.onScroll} className="theme-scroll flex items-center gap-1 overflow-x-auto">
             {tabs.map((t) => (
@@ -7215,6 +7214,8 @@ function installNativeWindowDrag() {
 }
 
 // ---------------------------------------------------------------- tabs
+
+const TITLE_BAR_WITH_TABS = 40 // px — TitleBar's h-10 when it hosts the tabs
 
 const DEFAULT_NAV = {
   selectedPath: null,
@@ -8591,6 +8592,7 @@ export default function App() {
             themeMode={themeMode}
             onThemeChange={setThemeMode}
             appFullscreen={appFullscreen}
+            topOffset={appFullscreen ? 0 : TITLE_BAR_WITH_TABS}
             lockedUrlKeys={lockedUrlKeysRef.current}
             onOpenBrowserTab={openBrowserTab}
           />
