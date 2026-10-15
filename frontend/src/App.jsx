@@ -7269,8 +7269,22 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew, onMove }) {
   const [draggingId, setDraggingId] = useState(null)
   const hover = TAB_HOVER
   const btnHover = TAB_BTN_HOVER
+  const scrollRef = useRef(null)
+  // Keep the active tab in view when the strip has to scroll.
+  useEffect(() => {
+    scrollRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [activeId, tabs.length])
+
   return (
-    <div className="flex h-full min-w-0 items-end gap-0 pl-2">
+    <div className="flex h-full min-w-0 flex-1 items-end pl-2">
+      <div
+        ref={scrollRef}
+        onWheel={(e) => {
+          // Mouse wheel scrolls the strip sideways, like Explorer.
+          if (scrollRef.current && e.deltaY) scrollRef.current.scrollLeft += e.deltaY
+        }}
+        className="no-scrollbar flex h-full min-w-0 items-end overflow-x-auto"
+      >
       {tabs.map((t, i) => {
         const active = t.id === activeId
         const nextActive = tabs[i + 1]?.id === activeId
@@ -7301,7 +7315,7 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew, onMove }) {
             }}
             onClick={() => onSelect(t.id)}
             title={t.title}
-            className={`no-drag group relative flex h-[34px] min-w-[110px] max-w-[230px] flex-1 cursor-default items-center gap-2 rounded-t-lg pr-1.5 pl-3 text-[12.5px] transition-colors ${
+            className={`no-drag group relative flex h-[34px] w-[230px] min-w-[46px] shrink cursor-default items-center gap-2 rounded-t-lg pr-1.5 pl-3 text-[12.5px] transition-colors ${
               draggingId === t.id ? 'opacity-70' : ''
             } ${
               active ? 'bg-base text-text shadow-[0_-1px_0_0_var(--color-border)]' : `text-muted ${hover} hover:text-text`
@@ -7330,6 +7344,7 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew, onMove }) {
           </div>
         )
       })}
+      </div>
       <button
         onClick={onNew}
         title="Nouvel onglet (Ctrl+T)"
@@ -7337,6 +7352,8 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew, onMove }) {
       >
         <IconPlus className="h-3.5 w-3.5" />
       </button>
+      {/* Always some empty title bar to grab the window by. */}
+      <div className="h-full min-w-[56px] flex-1" />
     </div>
   )
 }
@@ -7375,7 +7392,7 @@ function TitleBar({ children }) {
       className={`pywebview-drag-region flex shrink-0 items-center ${children ? 'h-10' : 'h-8 bg-base'}`}
       style={children ? TAB_STRIP_STYLE : undefined}
     >
-      <div className="flex h-full min-w-0 flex-1 items-end">{children}</div>
+      <div className="flex h-full min-w-0 flex-1 items-end overflow-hidden">{children}</div>
       <button
         onClick={() => api()?.minimize_window()}
         className="flex h-8 w-11 shrink-0 self-start cursor-pointer items-center justify-center text-muted hover:bg-surface-hover hover:text-text"

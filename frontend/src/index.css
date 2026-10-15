@@ -822,3 +822,11 @@ body {
 .tab-btn-hover:hover {
   background: light-dark(rgba(0, 0, 0, 0.1), rgba(255, 255, 255, 0.1));
 }
+
+/* Scrollable without a visible scrollbar (title-bar tab strip). */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
