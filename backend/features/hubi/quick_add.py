@@ -65,8 +65,6 @@ def _on_shown():
     win = _window
     if win is None:
         return
-    platform_svc.round_window_corners(win, (0x2A, 0x2A, 0x30))
-    platform_svc.show_dim_overlay(win, on_click=lambda: threading.Thread(target=_close, daemon=True).start())
     try:
         sw, sh = platform_svc.overlay_screen()["primary"]
         r = platform_svc.overlay_rect(win)
@@ -74,6 +72,8 @@ def _on_shown():
             platform_svc.overlay_set_rect(win, (sw - r[2]) // 2, int(sh * 0.28))
     except Exception:
         pass
+    platform_svc.round_window_corners(win, (0x2A, 0x2A, 0x30))
+    platform_svc.show_dim_overlay(win, on_click=lambda: threading.Thread(target=_close, daemon=True).start())
     _grab_focus_and_escape(win)
 
 
@@ -148,6 +148,10 @@ def open_window():
             js_api=QuickApi(),
             width=460,
             height=76,
+            # Created off-screen: _on_shown() centers it, so it no longer
+            # flashes at pywebview's default spot on the left first.
+            x=-4000,
+            y=-4000,
             frameless=True,
             easy_drag=True,
             shadow=False,
