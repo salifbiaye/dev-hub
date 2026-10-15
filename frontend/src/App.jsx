@@ -7225,6 +7225,7 @@ const DEFAULT_NAV = {
   groupSearch: '',
   repoSearch: '',
   repoGroupFilter: 'all',
+  processesOpen: false,
 }
 
 function loadTabs() {
@@ -7233,7 +7234,7 @@ function loadTabs() {
     if (Array.isArray(saved?.tabs) && saved.tabs.length) {
       return saved.tabs
         .filter((t) => t && t.id)
-        .map((t) => ({ id: t.id, nav: { ...DEFAULT_NAV, ...(t.nav || {}) } }))
+        .map((t) => ({ id: t.id, nav: { ...DEFAULT_NAV, ...(t.nav || {}), processesOpen: false } }))
     }
   } catch {
     // ignore storage errors
@@ -7251,9 +7252,30 @@ function loadActiveTab(tabs) {
   return tabs[0].id
 }
 
+// Light or dark theme, from the luminance of --color-base: the tab strip is a
+// shade darker than the page in both, but by how much differs a lot.
+function themeIsLight() {
+  const value = getComputedStyle(document.documentElement).getPropertyValue('--color-base').trim()
+  const m = value.match(/^#([0-9a-f]{6})$/i)
+  if (!m) return false
+  const n = parseInt(m[1], 16)
+  const lum = (0.2126 * ((n >> 16) & 255) + 0.7152 * ((n >> 8) & 255) + 0.0722 * (n & 255)) / 255
+  return lum > 0.5
+}
+
+function tabStripStyle(light) {
+  return {
+    background: light
+      ? 'color-mix(in srgb, var(--color-base) 91%, #000)'
+      : 'color-mix(in srgb, var(--color-base) 62%, #000)',
+  }
+}
+
 // Windows File Explorer–style tabs, in the title bar: the active one opens
 // onto the page below, the others sit on the darker strip.
 function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
+  const hover = themeIsLight() ? 'hover:bg-black/[0.06]' : 'hover:bg-white/[0.05]'
+  const btnHover = themeIsLight() ? 'hover:bg-black/10' : 'hover:bg-white/10'
   return (
     <div className="flex h-full min-w-0 items-end gap-0 pl-2">
       {tabs.map((t, i) => {
@@ -7273,7 +7295,7 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
             onClick={() => onSelect(t.id)}
             title={t.title}
             className={`no-drag group relative flex h-[34px] min-w-[110px] max-w-[230px] flex-1 cursor-default items-center gap-2 rounded-t-lg pr-1.5 pl-3 text-[12.5px] transition-colors ${
-              active ? 'bg-base text-text' : 'text-muted hover:bg-white/[0.04] hover:text-text'
+              active ? 'bg-base text-text shadow-[0_-1px_0_0_var(--color-border)]' : `text-muted ${hover} hover:text-text`
             }`}
           >
             <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded bg-accent text-white">
@@ -7286,7 +7308,7 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
                 onClose(t.id)
               }}
               title="Fermer l'onglet (Ctrl+W)"
-              className={`flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-white/10 hover:text-text ${
+              className={`flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted ${btnHover} hover:text-text ${
                 active ? '' : 'opacity-0 group-hover:opacity-100'
               }`}
             >
@@ -7302,7 +7324,7 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew }) {
       <button
         onClick={onNew}
         title="Nouvel onglet (Ctrl+T)"
-        className="no-drag mb-[3px] ml-1 flex h-7 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-white/10 hover:text-text"
+        className={`no-drag mb-[3px] ml-1 flex h-7 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted ${btnHover} hover:text-text`}
       >
         <IconPlus className="h-3.5 w-3.5" />
       </button>
@@ -7342,7 +7364,7 @@ function TitleBar({ children }) {
   return (
     <div
       className={`pywebview-drag-region flex shrink-0 items-center ${children ? 'h-10' : 'h-8 bg-base'}`}
-      style={children ? { background: 'color-mix(in srgb, var(--color-base) 62%, #000)' } : undefined}
+      style={children ? tabStripStyle(themeIsLight()) : undefined}
     >
       <div className="flex h-full min-w-0 flex-1 items-end">{children}</div>
       <button
@@ -7566,6 +7588,9 @@ export default function App() {
   const setRepoSearch = navSetter('repoSearch')
   const setRepoGroupFilter = navSetter('repoGroupFilter')
   const setHubiPageOpen = navSetter('hubiPageOpen')
+  // The Processus panel belongs to the tab that opened it (named after it).
+  const processesOpen = !!activeNav.processesOpen
+  const setProcessesOpen = navSetter('processesOpen')
 
   useEffect(() => {
     try {
@@ -7666,7 +7691,6 @@ export default function App() {
   }
   const [runningPaths, setRunningPaths] = useState(() => new Set())
   const [runningMeta, setRunningMeta] = useState({})
-  const [processesOpen, setProcessesOpen] = useState(false)
   // Hubi runs as its own process (DevHub.exe --hubi); this only drives it.
   const [hubi, setHubi] = useState({ running: false, autostart: false })
   const refreshHubi = useCallback(() => {
@@ -8094,6 +8118,7 @@ export default function App() {
   const { selectedRepo, showList } = viewOf(activeNav)
 
   function tabTitle(nav) {
+    if (nav.processesOpen) return 'Processus'
     if (nav.hubiPageOpen) return 'Hubi'
     const repo = repos.find((r) => r.path === nav.selectedPath)
     if (repo) return repo.name
@@ -8573,7 +8598,7 @@ export default function App() {
           onCancel={() => setConfirmDialog(null)}
         />
       )}
-      {hasOpenedProcesses && (
+      {(hasOpenedProcesses || processesOpen) && (
         <div className={processesOpen ? '' : 'hidden'}>
           <ProcessesPanel
             tabs={tabOrder
