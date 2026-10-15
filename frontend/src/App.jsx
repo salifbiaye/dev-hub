@@ -8470,8 +8470,8 @@ export default function App() {
       )}
       <SplashScreen ready={ready} />
       {!appFullscreen && (
-      {/* No "Dev Hub" logo here: every tab already carries it. */}
       <header className="pywebview-drag-region flex shrink-0 items-center justify-end gap-4 overflow-x-auto border-b border-border px-6 py-4">
+        {/* No "Dev Hub" logo here: every tab already carries it. */}
         <div className="flex shrink-0 items-center gap-2 whitespace-nowrap">
           <Button variant="subtle" onClick={() => setGlobalSearchOpen(true)}>
             <IconSearch className="h-3.5 w-3.5" />
