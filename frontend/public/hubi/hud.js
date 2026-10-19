@@ -112,13 +112,18 @@
   // (sous le minuteur s'il y en a un).
   const TOOL_STYLE = {
     claude: { color: [217, 119, 87], label: 'Claude' },
+    claude_agents: { color: [240, 170, 140], label: 'agent', plural: 'agents' },
     codex: { color: [180, 190, 200], label: 'Codex' },
   }
 
   function drawSessions(ctx, counts, y) {
     const parts = Object.keys(TOOL_STYLE)
       .filter((tool) => counts[tool] > 0)
-      .map((tool) => ({ text: counts[tool] + ' ' + TOOL_STYLE[tool].label, color: TOOL_STYLE[tool].color }))
+      .map((tool) => {
+        const st = TOOL_STYLE[tool]
+        const label = counts[tool] > 1 && st.plural ? st.plural : st.label
+        return { text: counts[tool] + ' ' + label, color: st.color }
+      })
     if (!parts.length) return null
     ctx.save()
     ctx.font = BADGE_FONT

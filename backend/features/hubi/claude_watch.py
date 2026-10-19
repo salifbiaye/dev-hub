@@ -20,7 +20,8 @@ from pathlib import Path
 from . import reactions
 
 ROOT = Path.home() / ".claude" / "projects"
-EVERY = 15.0  # s between passes
+EVERY = 5.0  # s between passes
+AGENT_ACTIVE = 60.0  # s: a sub-agent that wrote within this window and has not ended its turn is working
 RECENT = 120.0  # s: transcripts written within this window are looked at
 QUIET = 20.0  # s without writes before an ended turn counts as finished
 TAIL_BYTES = 96 * 1024
@@ -29,7 +30,7 @@ _stop = threading.Event()
 _thread = None
 
 
-def _last_turn_state(path):
+def _last_turn_state(path, sidechain=False):
     """('working' | 'done' | None, cwd) from the end of a transcript."""
     try:
         with path.open("rb") as fh:
@@ -46,7 +47,7 @@ def _last_turn_state(path):
         except ValueError:
             continue
         cwd = cwd or obj.get("cwd")
-        if obj.get("isSidechain"):
+        if obj.get("isSidechain") and not sidechain:
             continue  # a sub-agent's own turn, not the session's
         kind = obj.get("type")
         if kind == "user":
@@ -95,10 +96,28 @@ def _enabled():
         return False
 
 
+def _working_agents(now):
+    """Sub-agents (Task tool) still at work: their own transcripts live in
+    <project>/<session>/subagents/*.jsonl."""
+    n = 0
+    for path in ROOT.glob("*/*/subagents/*.jsonl"):
+        try:
+            if now - path.stat().st_mtime > AGENT_ACTIVE:
+                continue
+        except OSError:
+            continue
+        state, _cwd = _last_turn_state(path, sidechain=True)
+        if state == "working":
+            n += 1
+    return n
+
+
 def _pass():
     if not _enabled():
+        reactions.set_agents("claude", 0)
         return
     now = time.time()
+    reactions.set_agents("claude", _working_agents(now))
     known = reactions.session_states(tool="claude")
     for path in ROOT.glob("*/*.jsonl"):
         try:

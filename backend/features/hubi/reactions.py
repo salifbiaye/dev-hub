@@ -80,9 +80,25 @@ def _compute():
     return base, sticky
 
 
+_agents = {}  # tool -> sub-agents working right now (claude_watch.py)
+
+
+def set_agents(tool, n):
+    """Sub-agents a session started (Task tool), shown next to the sessions."""
+    with _lock:
+        if _agents.get(tool, 0) == n:
+            return
+        _agents[tool] = n
+    _publish()
+
+
 def _counts():
-    """Sessions running right now (working or waiting), per tool."""
+    """Sessions running right now (working or waiting), per tool, plus their
+    working sub-agents ("claude_agents")."""
     counts = {}
+    for tool, n in _agents.items():
+        if n:
+            counts[f"{tool}_agents"] = n
     for s in _sessions.values():
         counts[s.get("tool", "claude")] = counts.get(s.get("tool", "claude"), 0) + 1
     return counts
