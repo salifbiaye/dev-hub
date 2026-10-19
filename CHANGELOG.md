@@ -6,6 +6,11 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.6.2] - 2026-10-19
+
+### ✨ Nouveautés
+- Hubi compte aussi les sous-agents au travail : en plus des sessions (« ● 2 Claude »), son badge affiche les agents lancés par une session qui travaillent encore (« ● 8 agents »), mis à jour toutes les 5 secondes
+
 ## [0.6.1] - 2026-10-15
 
 ### ✨ Nouveautés
