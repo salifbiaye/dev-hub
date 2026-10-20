@@ -23,6 +23,8 @@ ROOT = Path.home() / ".claude" / "projects"
 EVERY = 5.0  # s between passes
 AGENT_ACTIVE = 60.0  # s: a sub-agent that wrote within this window and has not ended its turn is working
 RECENT = 120.0  # s: transcripts written within this window are looked at
+STALE = 120.0  # s of silence after which a "working" session is considered over
+STALE_NO_FILE = 1800.0  # s: same, for a session whose transcript can't be found
 QUIET = 20.0  # s without writes before an ended turn counts as finished
 TAIL_BYTES = 96 * 1024
 
@@ -112,12 +114,42 @@ def _working_agents(now):
     return n
 
 
+def _transcript_idle(sid, now):
+    """Seconds since the session last wrote anything — its own transcript or
+    one of its sub-agents' — or None if the transcript can't be found."""
+    for path in ROOT.glob(f"*/{sid}.jsonl"):
+        try:
+            newest = path.stat().st_mtime
+            for sub in (path.parent / sid / "subagents").glob("*.jsonl"):
+                newest = max(newest, sub.stat().st_mtime)
+        except OSError:
+            continue
+        return now - newest
+    return None
+
+
+def _drop_stale(now):
+    """A session shown as working whose transcript went quiet is over: no end
+    signal arrives when it is interrupted (Esc), cut by the usage limit or
+    killed, so it would otherwise stay in the badge for hours. It comes back
+    by itself if it writes again (see the "working" case in _pass)."""
+    for sid, info in reactions.session_details(tool="claude").items():
+        if info["state"] != "working" or sid.startswith("p:"):
+            continue
+        idle = _transcript_idle(sid, now)
+        if idle is None:
+            idle = now - info["at"] if now - info["at"] > STALE_NO_FILE else 0
+        if idle > STALE:
+            reactions.handle_event("claude_end", None, None, sid)
+
+
 def _pass():
     if not _enabled():
         reactions.set_agents("claude", 0)
         return
     now = time.time()
     reactions.set_agents("claude", _working_agents(now))
+    _drop_stale(now)
     known = reactions.session_states(tool="claude")
     for path in ROOT.glob("*/*.jsonl"):
         try:

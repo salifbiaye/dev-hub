@@ -130,6 +130,16 @@ def session_states(tool=None):
         return {k: s["state"] for k, s in _sessions.items() if tool is None or s.get("tool", "claude") == tool}
 
 
+def session_details(tool=None):
+    """{session key: {"state", "at"}} for the sessions Hubi shows now."""
+    with _lock:
+        return {
+            k: {"state": s["state"], "at": s["at"]}
+            for k, s in _sessions.items()
+            if tool is None or s.get("tool", "claude") == tool
+        }
+
+
 def republish():
     """Resend the whole state (after Hubi's page was reloaded)."""
     with _lock:
