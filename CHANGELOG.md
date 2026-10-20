@@ -6,6 +6,12 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.6.3] - 2026-10-20
+
+### 🐛 Corrections
+- Fenêtre Dev Hub noire : si la page arrête de se dessiner alors que la fenêtre est affichée, elle se recharge toute seule (sauf si une modification de l'onglet Code n'est pas enregistrée)
+- Hubi gardait comme « au travail » une session Claude interrompue (Échap), coupée par la limite d'usage ou tuée : elle est retirée du badge après 2 minutes sans activité, et revient toute seule si elle reprend
+
 ## [0.6.2] - 2026-10-19
 
 ### ✨ Nouveautés
