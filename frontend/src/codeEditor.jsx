@@ -20,10 +20,21 @@ export function previewKindForFile(file) {
 // Unsaved edits, kept outside the component: the Code tab re-mounts the
 // viewer on every refresh, which must not throw away what was being typed.
 const drafts = new Map()
+// window.__devhub_dirty tells core/page_watchdog.py not to reload the page
+// (which would lose these edits).
+const markDirty = () => {
+  window.__devhub_dirty = drafts.size > 0
+}
 export const draftStore = {
   get: (key) => drafts.get(key),
-  set: (key, value) => drafts.set(key, value),
-  clear: (key) => drafts.delete(key),
+  set: (key, value) => {
+    drafts.set(key, value)
+    markDirty()
+  },
+  clear: (key) => {
+    drafts.delete(key)
+    markDirty()
+  },
 }
 
 /**

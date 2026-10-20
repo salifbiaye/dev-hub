@@ -172,6 +172,11 @@ class WindowsPlatform(base.PlatformService):
         win = CompositionWindow(url, rect, api, user_data_dir, on_ready, on_closed)
         return win if win.start() else None
 
+    def window_is_showing(self, win):
+        hwnd = _overlay._hwnd(win)
+        user32 = _overlay.user32
+        return bool(hwnd) and bool(user32.IsWindowVisible(hwnd)) and not user32.IsIconic(hwnd)
+
     def claim_single_instance(self):
         from . import single_instance
 

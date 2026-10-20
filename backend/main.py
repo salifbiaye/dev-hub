@@ -8,6 +8,7 @@ import webview
 
 import icons
 from api import Api
+from core import page_watchdog
 from app_config import load_config
 from core.platform import platform_svc
 from core.server.static_server import serve_own_ui
@@ -54,7 +55,7 @@ os.environ.setdefault("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", _PROXY_BYPASS_ARG
 
 def main():
     # One Dev Hub at a time: launching it again shows the one already open.
-    if not platform_svc.claim_single_instance():
+    if not os.environ.get("DEV_HUB_MULTI") and not platform_svc.claim_single_instance():
         platform_svc.focus_running_instance()
         return
     api = Api()
@@ -108,6 +109,8 @@ def main():
         threading.Thread(target=save_theme_vars_snapshot, daemon=True).start()
 
     window.events.loaded += _on_loaded
+    # Black-window safety net: reload the page if it stops painting.
+    window.events.shown += lambda: page_watchdog.start(window, target)
 
     # Stale WebView2 profile dirs from past launches otherwise only get
     # cleaned when someone happens to open Processus and click the button —

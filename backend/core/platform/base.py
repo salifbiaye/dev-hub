@@ -123,6 +123,10 @@ class PlatformService(ABC):
         where unsupported (callers then fall back to the framed window)."""
         return None
 
+    def window_is_showing(self, win):
+        """Visible and not minimized (default: assume yes)."""
+        return True
+
     def claim_single_instance(self):
         """True if this is the only running Dev Hub (default: no check)."""
         return True
