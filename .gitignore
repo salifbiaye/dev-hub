@@ -22,3 +22,6 @@ release.sh
 *.log
 .DS_Store
 Thumbs.db
+backend/build-restart/
+backend/dist-restart/
+frontend/build/

@@ -538,18 +538,25 @@ function GroupMemberRow({ repo, selected, onToggleSelect, isRunning, runningCoun
 }
 
 
+// "" is the project root; any other value is the folder relative to it.
+const folderLabel = (dir) => (dir === '' ? 'Racine du projet' : dir)
+
 function EnvPanel({ repo, onNotify, refreshSignal }) {
-  const [files, setFiles] = useState([])
+  const [files, setFiles] = useState([]) // [{ path, dir, name }]
+  const [folders, setFolders] = useState([]) // [{ dir, kind, has_env }]
+  const [newMenuOpen, setNewMenuOpen] = useState(false)
+  const [pendingFile, setPendingFile] = useState(null) // file to open once unsaved edits are dropped
   const [activeFile, setActiveFile] = useState(null)
   const [entries, setEntries] = useState([])
   const [revealed, setRevealed] = useState(() => new Set())
   const [dirty, setDirty] = useState(false)
 
   const loadFiles = useCallback(async () => {
-    const list = await api().list_env_files(repo.path)
-    const safe = Array.isArray(list) ? list : []
-    setFiles(safe)
-    setActiveFile((prev) => (prev && safe.includes(prev) ? prev : safe[0] || null))
+    const result = await api().list_env_files(repo.path)
+    const list = Array.isArray(result?.files) ? result.files : []
+    setFiles(list)
+    setFolders(Array.isArray(result?.folders) ? result.folders : [])
+    setActiveFile((prev) => (prev && list.some((f) => f.path === prev) ? prev : list[0]?.path || null))
   }, [repo.path])
 
   useEffect(() => {
@@ -620,11 +627,37 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
     }
   }
 
-  async function createFile() {
-    await api().create_env_file(repo.path, '.env')
-    onNotify('.env créé')
-    loadFiles()
+  // Opening another file while this one has unsaved edits asks first.
+  function openFile(path) {
+    if (path === activeFile) return
+    if (dirty) setPendingFile(path)
+    else setActiveFile(path)
   }
+
+  async function createFile(dir) {
+    const path = dir ? `${dir}/.env` : '.env'
+    const result = await api().create_env_file(repo.path, path)
+    if (result?.error) {
+      onNotify(result.error, true)
+      return
+    }
+    onNotify(`${path} créé`)
+    setNewMenuOpen(false)
+    await loadFiles()
+    setActiveFile(path)
+  }
+
+  // Files grouped by folder, in the order the backend sent them (root first).
+  const groups = useMemo(() => {
+    const byDir = new Map()
+    for (const f of files) {
+      if (!byDir.has(f.dir)) byDir.set(f.dir, [])
+      byDir.get(f.dir).push(f)
+    }
+    const kindOf = Object.fromEntries(folders.map((d) => [d.dir, d.kind]))
+    return [...byDir.entries()].map(([dir, list]) => ({ dir, kind: kindOf[dir] || null, files: list }))
+  }, [files, folders])
+  const active = files.find((f) => f.path === activeFile) || null
 
   return (
     <div>
@@ -638,30 +671,85 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
       </div>
 
       {files.length === 0 ? (
-        <div className="flex items-center justify-between rounded-lg border border-border bg-surface p-3">
-          <p className="text-xs text-muted">Aucun fichier .env détecté dans ce repo.</p>
-          <Button variant="ghost" onClick={createFile}>
-            <IconPlus className="h-3.5 w-3.5" />
-            Créer .env
-          </Button>
+        <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3">
+          <p className="text-xs text-muted">Aucun fichier .env détecté dans ce projet (sous-dossiers compris).</p>
+          <div className="flex flex-wrap gap-2">
+            {folders
+              .filter((d) => d.dir === '' || d.kind)
+              .map((d) => (
+                <Button key={d.dir || '/'} variant="ghost" onClick={() => createFile(d.dir)}>
+                  <IconPlus className="h-3.5 w-3.5" />
+                  Créer {d.dir ? `${d.dir}/.env` : '.env'}
+                  {d.kind && <span className="text-[10px] text-muted">· {d.kind}</span>}
+                </Button>
+              ))}
+          </div>
         </div>
       ) : (
         <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap gap-2">
-            {files.map((f) => (
-              <button
-                key={f}
-                onClick={() => setActiveFile(f)}
-                className={`cursor-pointer rounded-md border px-2.5 py-1 font-mono text-[12px] transition-colors duration-150 ${
-                  activeFile === f
-                    ? 'border-accent bg-accent-bg text-accent'
-                    : 'border-border text-muted hover:text-text hover:border-border-strong'
-                }`}
-              >
-                {f}
-              </button>
+          <div className="flex flex-col gap-2">
+            {groups.map((g) => (
+              <div key={g.dir || '/'} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted" style={{ flexBasis: '11rem' }} title={g.dir || repo.path}>
+                  <IconFolder className="h-3.5 w-3.5 shrink-0 text-accent" />
+                  <span className="truncate font-medium text-text">{folderLabel(g.dir)}</span>
+                  {g.kind && <span className="shrink-0 rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px]">{g.kind}</span>}
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {g.files.map((f) => (
+                    <button
+                      key={f.path}
+                      onClick={() => openFile(f.path)}
+                      title={f.path}
+                      className={`cursor-pointer rounded-md border px-2.5 py-1 font-mono text-[12px] transition-colors duration-150 ${
+                        activeFile === f.path
+                          ? 'border-accent bg-accent-bg text-accent'
+                          : 'border-border text-muted hover:text-text hover:border-border-strong'
+                      }`}
+                    >
+                      {f.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
+            <div className="relative self-start">
+              <Button variant="ghost" onClick={() => setNewMenuOpen((v) => !v)}>
+                <IconPlus className="h-3.5 w-3.5" />
+                Nouveau .env
+              </Button>
+              {newMenuOpen && (
+                <div
+                  className="absolute left-0 top-full z-20 mt-1 min-w-56 rounded-md border border-border-strong bg-surface p-1 shadow-lg"
+                  onMouseLeave={() => setNewMenuOpen(false)}
+                >
+                  {folders.map((d) => {
+                    const exists = files.some((f) => f.path === (d.dir ? `${d.dir}/.env` : '.env'))
+                    return (
+                      <button
+                        key={d.dir || '/'}
+                        disabled={exists}
+                        onClick={() => createFile(d.dir)}
+                        className="flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-left text-[11.5px] text-text hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40"
+                        title={exists ? 'Ce dossier a déjà un .env' : undefined}
+                      >
+                        <IconFolder className="h-3 w-3 shrink-0 text-accent" />
+                        <span className="min-w-0 flex-1 truncate">{folderLabel(d.dir)}</span>
+                        {d.kind && <span className="shrink-0 text-[10px] text-muted">{d.kind}</span>}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
           </div>
+
+          {active && (
+            <p className="text-[11px] text-muted">
+              Variables de <span className="font-mono text-text">{active.path}</span>
+              {active.dir !== '' && ' — lues par ce dossier uniquement'}
+            </p>
+          )}
 
           <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-2">
             {entries.length === 0 && <p className="px-2 py-1 text-xs text-muted">Fichier vide.</p>}
@@ -699,6 +787,18 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
             </Button>
           </div>
         </div>
+      )}
+      {pendingFile && (
+        <ConfirmModal
+          title="Modifications non enregistrées"
+          message={`Tes changements dans ${activeFile} seront perdus si tu ouvres ${pendingFile}. Enregistre-les d'abord si tu veux les garder.`}
+          confirmLabel="Abandonner"
+          onConfirm={() => {
+            setActiveFile(pendingFile)
+            setPendingFile(null)
+          }}
+          onCancel={() => setPendingFile(null)}
+        />
       )}
     </div>
   )
@@ -1150,7 +1250,10 @@ function readTerminalThemeColors() {
   }
 }
 
-function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDetected, className, closeOnUnmount, colorize = true }) {
+function PtyTerminal({
+  terminalId, startFn, onReady, onExited, onNotify, onUrlDetected, className, closeOnUnmount, colorize = true,
+  fontSize = 16, fitToContainer = true, fixedCols = 240,
+}) {
   const containerRef = useRef(null)
   const idRef = useRef(terminalId || null)
   const termRef = useRef(null)
@@ -1170,8 +1273,16 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
       // its own cursor/line handling for a full TUI, and forcing this on
       // top of that causes misaligned redraws.
       convertEol: colorize,
-      fontFamily: "'JetBrains Mono', ui-monospace, monospace",
-      fontSize: 12,
+      // Match Windows Terminal's readable default more closely. Claude Code
+      // is a full-screen terminal UI: a tiny, tightly-spaced canvas makes it
+      // feel unlike its native Windows Terminal session even when the PTY
+      // dimensions are correct.
+      fontFamily: "'Cascadia Mono', Consolas, ui-monospace, monospace",
+      fontSize,
+      // Claude's logo and separators are made of terminal block glyphs.
+      // Their cells must stay square: an expanded line height makes the
+      // artwork appear vertically cut apart versus Windows Terminal.
+      lineHeight: 1,
       theme: readTerminalThemeColors(),
     })
     const fitAddon = new FitAddon()
@@ -1181,7 +1292,33 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
     searchAddonRef.current = searchAddon
     termRef.current = term
     term.open(containerRef.current)
-    fitAddon.fit()
+    const resizeTerminal = () => {
+      if (fitToContainer) {
+        fitAddon.fit()
+      } else {
+        // Build/server logs frequently contain a full request URL, stack
+        // trace or Maven/Spring line. Keep a wide terminal grid so xterm can
+        // reflow those soft-wrapped rows and let the outer panel scroll on X.
+        const rowHeight = Math.ceil(fontSize * 1.25)
+        const rows = Math.max(24, Math.floor((containerRef.current?.clientHeight || 480) / rowHeight))
+        term.resize(fixedCols, rows)
+        // xterm's root normally stays at the viewport width even if its grid
+        // has more columns. That hides the overflow instead of giving the
+        // surrounding Processus panel a horizontal scrollbar. Match the root
+        // to the real canvas/grid width after each resize.
+        requestAnimationFrame(() => {
+          const cellWidth = term?._core?._renderService?.dimensions?.css?.cell?.width
+          const gridWidth = Math.ceil((cellWidth || fontSize * 0.61) * fixedCols) + 4
+          const root = term.element
+          if (!root || !containerRef.current) return
+          root.style.width = `${gridWidth}px`
+          root.style.minWidth = `${gridWidth}px`
+          containerRef.current.style.overflowX = 'auto'
+          containerRef.current.style.overflowY = 'auto'
+        })
+      }
+    }
+    resizeTerminal()
 
     // xterm's built-in copyOnSelect relies on navigator.clipboard /
     // execCommand, both silently blocked under the app's file:// origin —
@@ -1261,7 +1398,10 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
     if (terminalId) {
       attach(terminalId)
     } else if (startFn) {
-      startFn().then((result) => {
+      // Give an interactive TUI (Claude/Codex) the fitted size before it
+      // draws its initial screen; a later resize is too late for its first
+      // layout on Windows/ConPTY.
+      startFn({ rows: term.rows, cols: term.cols }).then((result) => {
         if (result?.error) {
           onNotify?.(result.error, true)
           term.write(`\r\n\x1b[31mErreur: ${result.error}\x1b[0m\r\n`)
@@ -1273,7 +1413,7 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
     }
 
     function handleResize() {
-      fitAddon.fit()
+      resizeTerminal()
       if (idRef.current) api().resize_terminal(idRef.current, term.rows, term.cols)
     }
     window.addEventListener('resize', handleResize)
@@ -1375,14 +1515,14 @@ function PtyTerminal({ terminalId, startFn, onReady, onExited, onNotify, onUrlDe
 }
 
 function EmbeddedTerminal({ repo, sessionId, prompt, onNotify, onBack }) {
-  const startFn = useRef(() => api().start_terminal(repo.path, sessionId, prompt || null)).current
+  const startFn = useRef(({ rows, cols }) => api().start_terminal(repo.path, sessionId, prompt || null, rows, cols)).current
   const [fullscreen, setFullscreen] = useState(false)
 
   return (
     <div
       className={
         fullscreen
-          ? 'fixed inset-0 z-50 flex flex-col overflow-hidden bg-base'
+          ? 'fullscreen-below-tabs z-50 flex flex-col overflow-hidden bg-base'
           : 'flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border border-border'
       }
     >
@@ -2248,7 +2388,7 @@ function SchemaDiagram({ repo, onNotify }) {
   if (tables.length === 0) return <p className="p-3 text-xs text-muted">Aucune table.</p>
 
   return (
-    <div ref={flowWrapperRef} className={fullscreen ? 'fixed inset-0 z-50 flex flex-col bg-surface' : 'flex flex-1 flex-col'}>
+    <div ref={flowWrapperRef} className={fullscreen ? 'fullscreen-below-tabs z-50 flex flex-col bg-surface' : 'flex flex-1 flex-col'}>
       <ReactFlowProvider>
         <SchemaDiagramToolbar
           wrapperRef={flowWrapperRef}
@@ -2415,11 +2555,61 @@ function DatabasePanel({ repo, onNotify }) {
   const [sortDir, setSortDir] = useState('asc')
   const [panelFullscreen, setPanelFullscreen] = useState(false)
 
-  const [sql, setSql] = useState('')
-  const [sqlRunning, setSqlRunning] = useState(false)
-  const [sqlResult, setSqlResult] = useState(null)
-  const [sqlError, setSqlError] = useState('')
+  // Several query tabs, each with its own text and result; the SQL texts are
+  // remembered per project (results are not).
+  const sqlTabsKey = `devhub_sql_tabs:${repo.path}`
+  const [queries, setQueries] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(sqlTabsKey) || 'null')
+      if (Array.isArray(saved?.queries) && saved.queries.length) {
+        return saved.queries.map((q) => ({ id: q.id, title: q.title, sql: q.sql || '', running: false, result: null, error: '' }))
+      }
+    } catch {
+      // ignore storage errors
+    }
+    return [{ id: 1, title: 'Requête 1', sql: '', running: false, result: null, error: '' }]
+  })
+  const [activeQueryId, setActiveQueryId] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(sqlTabsKey) || 'null')?.active ?? null
+    } catch {
+      return null
+    }
+  })
+  const activeQuery = queries.find((q) => q.id === activeQueryId) || queries[0]
+  const sql = activeQuery.sql
+  const sqlRunning = activeQuery.running
+  const sqlResult = activeQuery.result
+  const sqlError = activeQuery.error
+  const patchQuery = (id, patch) => setQueries((list) => list.map((q) => (q.id === id ? { ...q, ...patch } : q)))
+  const setSql = (value) => patchQuery(activeQuery.id, { sql: value })
   const [sqlExporting, setSqlExporting] = useState(false)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        sqlTabsKey,
+        JSON.stringify({ active: activeQuery.id, queries: queries.map((q) => ({ id: q.id, title: q.title, sql: q.sql })) }),
+      )
+    } catch {
+      // ignore storage errors
+    }
+  }, [queries, activeQuery.id, sqlTabsKey])
+
+  function addQuery() {
+    const id = Math.max(...queries.map((q) => q.id)) + 1
+    const n = queries.length + 1
+    setQueries((list) => [...list, { id, title: `Requête ${n}`, sql: '', running: false, result: null, error: '' }])
+    setActiveQueryId(id)
+  }
+
+  function closeQuery(id) {
+    if (queries.length === 1) return
+    const i = queries.findIndex((q) => q.id === id)
+    const next = queries.filter((q) => q.id !== id)
+    setQueries(next)
+    if (activeQuery.id === id) setActiveQueryId(next[Math.min(i, next.length - 1)].id)
+  }
   const [snippets, setSnippets] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('devhub_sql_snippets') || '[]')
@@ -2667,17 +2857,17 @@ function DatabasePanel({ repo, onNotify }) {
   }
 
   async function runSql() {
-    setSqlRunning(true)
-    setSqlError('')
+    // The result lands in the tab the query was run from, even if the user
+    // switches to another one meanwhile.
+    const id = activeQuery.id
+    patchQuery(id, { running: true, error: '' })
     const result = await api().db_run_query(repo.path, sql)
-    setSqlRunning(false)
     if (result?.error) {
-      setSqlError(result.error)
-      setSqlResult(null)
+      patchQuery(id, { running: false, error: result.error, result: null })
       onNotify('Erreur SQL', true)
       return
     }
-    setSqlResult(result)
+    patchQuery(id, { running: false, result })
     onNotify(result.message || `${result.rows?.length ?? 0} ligne(s) retournée(s)`)
   }
 
@@ -2760,7 +2950,7 @@ function DatabasePanel({ repo, onNotify }) {
     <div
       className={
         panelFullscreen
-          ? 'fixed inset-0 z-50 flex overflow-hidden bg-surface'
+          ? 'fullscreen-below-tabs z-50 flex overflow-hidden bg-surface'
           : 'flex h-[36rem] overflow-hidden rounded-xl border border-border bg-surface shadow-[var(--card-shadow)]'
       }
     >
@@ -2923,6 +3113,49 @@ function DatabasePanel({ repo, onNotify }) {
                   {sqlRunning ? 'Exécution…' : 'Exécuter'}
                 </Button>
               </div>
+            </div>
+            <div className="flex shrink-0 items-end gap-0.5 overflow-x-auto border-b border-border px-2 pt-1.5">
+              {queries.map((q) => {
+                const active = q.id === activeQuery.id
+                return (
+                  <div
+                    key={q.id}
+                    onClick={() => setActiveQueryId(q.id)}
+                    onMouseDown={(e) => {
+                      if (e.button === 1) {
+                        e.preventDefault()
+                        closeQuery(q.id)
+                      }
+                    }}
+                    title={q.sql.trim() ? q.sql.trim().slice(0, 200) : q.title}
+                    className={`group flex max-w-[11rem] shrink-0 cursor-pointer items-center gap-1.5 rounded-t-md border border-b-0 px-2.5 py-1 text-[11px] transition-colors ${
+                      active ? 'border-border bg-base text-text' : 'border-transparent text-muted hover:text-text'
+                    }`}
+                  >
+                    {q.running && <IconRefresh className="h-3 w-3 shrink-0 animate-spin" />}
+                    <span className="truncate">{q.title}</span>
+                    {queries.length > 1 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          closeQuery(q.id)
+                        }}
+                        title="Fermer cet onglet"
+                        className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-danger group-hover:opacity-100"
+                      >
+                        <IconClose className="h-3 w-3" />
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+              <button
+                onClick={addQuery}
+                title="Nouvelle requête"
+                className="mb-0.5 ml-1 flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-surface-hover hover:text-text"
+              >
+                <IconPlus className="h-3.5 w-3.5" />
+              </button>
             </div>
             <textarea
               value={sql}
@@ -3673,7 +3906,10 @@ function RunPanel({ repo, runningConfigs, onStart, onStop, onClear, onNotify }) 
               key={runningConfigs[activeRunName].terminalId}
               terminalId={runningConfigs[activeRunName].terminalId}
               onNotify={onNotify}
-              className="h-[32rem] overflow-hidden rounded-lg border border-border bg-base p-2"
+              fontSize={12}
+              fitToContainer={false}
+              fixedCols={240}
+              className="h-[32rem] overflow-auto rounded-lg border border-border bg-base p-2"
             />
           ) : (
             <EmptyState
@@ -4464,7 +4700,7 @@ function toLf(text) {
   return text.replace(/\r\n/g, '\n')
 }
 
-function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasChanges, onSaved }) {
+function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasChanges, onSaved, projectFiles, onOpenFile }) {
   const [content, setContent] = useState(null)
   const [diffRows, setDiffRows] = useState(null)
   const [meta, setMeta] = useState(null)
@@ -4641,30 +4877,47 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   const lang = useMemo(() => prismLangForFile(file), [file])
 
   const needle = search.trim().toLowerCase()
+  // While editing, the search runs on the text being typed, not on the file.
+  const searchTexts = useMemo(() => (mode === 'edit' ? (draft ?? '').split('\n') : rows.map((r) => r.text)), [mode, draft, rows])
   const matches = useMemo(() => {
     if (!needle) return []
     const found = []
-    rows.forEach((row, i) => {
-      if (row.text.toLowerCase().includes(needle)) found.push(i)
+    searchTexts.forEach((text, i) => {
+      if (text.toLowerCase().includes(needle)) found.push(i)
     })
     return found
-  }, [needle, rows])
+  }, [needle, searchTexts])
+  const editorRef = useRef(null)
+  const matchesRef = useRef([])
+  matchesRef.current = matches
+  const activeMatchLine = matches.length ? matches[((matchIndex % matches.length) + matches.length) % matches.length] : -1
 
   useEffect(() => {
     setMatchIndex(0)
   }, [needle])
 
   useEffect(() => {
-    if (matches.length === 0) return
+    if (matches.length === 0 || mode === 'edit') return
     const targetLine = matches[((matchIndex % matches.length) + matches.length) % matches.length]
     lineRefs.current[targetLine]?.scrollIntoView({ block: 'center' })
-  }, [matchIndex, matches])
+  }, [matchIndex, matches, mode])
+
+  // Edit mode: scroll the editor to the current match only when the search
+  // changes (not while typing in the editor, which also changes `matches`).
+  useEffect(() => {
+    const list = matchesRef.current
+    if (mode !== 'edit' || !needle || list.length === 0) return
+    const line = list[((matchIndex % list.length) + list.length) % list.length]
+    editorRef.current?.reveal(line, (draft ?? '').split('\n')[line]?.toLowerCase().indexOf(needle) ?? 0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matchIndex, needle, mode])
 
   return (
     <div ref={containerRef} className="flex flex-1 flex-col overflow-hidden">
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">
           {file}
+          {lang && <span className="ml-2 rounded border border-border px-1 py-0.5 font-sans text-[10px] uppercase text-muted">{lang}</span>}
           {dirty && <span className="ml-1.5 text-warning" title="Modifications non enregistrées">●</span>}
           {!dirty && savedAt > 0 && (
             <span className="ml-2 inline-flex items-center gap-1 font-sans text-[11px] text-success">
@@ -4699,12 +4952,21 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
             {saving ? 'Enregistrement…' : 'Enregistrer'}
           </Button>
         )}
-        {mode === 'code' && rows.length > 0 && (
+        {((mode === 'code' && rows.length > 0) || (mode === 'edit' && draft != null)) && (
           <div className="flex shrink-0 items-center gap-1">
             <input
               ref={searchInputRef}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  if (matches.length) setMatchIndex((i) => i + (e.shiftKey ? -1 : 1))
+                } else if (e.key === 'Escape') {
+                  setSearch('')
+                  e.currentTarget.blur()
+                }
+              }}
               placeholder="Rechercher (Ctrl+F)…"
               className="w-40 rounded-md border border-border bg-base px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
             />
@@ -4784,7 +5046,20 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
         draft == null ? (
           <p className="p-3 text-xs text-muted">Chargement…</p>
         ) : (
-          <CodeEditor value={draft} onChange={setDraft} onSave={save} highlight={highlight} />
+          <CodeEditor
+            ref={editorRef}
+            value={draft}
+            onChange={setDraft}
+            onSave={save}
+            highlight={highlight}
+            language={lang}
+            file={file}
+            projectFiles={projectFiles}
+            onOpenFile={onOpenFile}
+            onNotify={onNotify}
+            findTerm={needle}
+            findLine={activeMatchLine}
+          />
         )
       ) : mode === 'preview' ? (
         raw == null ? (
@@ -5061,7 +5336,7 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     <div
       className={
         fullscreen
-          ? 'fixed inset-0 z-50 flex overflow-hidden bg-surface'
+          ? 'fullscreen-below-tabs z-50 flex overflow-hidden bg-surface'
           : 'flex h-[75vh] overflow-hidden rounded-lg border border-border bg-surface'
       }
     >
@@ -5113,6 +5388,8 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
           onNotify={onNotify}
           hasChanges={!!statusMap[selectedPath]}
           onSaved={onFileSaved}
+          projectFiles={files}
+          onOpenFile={openFile}
           fullscreen={fullscreen}
           onToggleFullscreen={() => setFullscreen((v) => !v)}
         />
@@ -7476,6 +7753,11 @@ export default function App() {
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [appFullscreen, setAppFullscreen] = useState(false)
+  // Panels that go "full screen" (Code, SQL, terminal, diagram) stop under the
+  // tab bar, so the tabs stay usable; --titlebar-h is that bar's height.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--titlebar-h', appFullscreen ? '0px' : `${TITLE_BAR_WITH_TABS}px`)
+  }, [appFullscreen])
   const [updateInfo, setUpdateInfo] = useState(null)
 
   useEffect(() => {

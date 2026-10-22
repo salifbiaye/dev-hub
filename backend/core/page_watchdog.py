@@ -15,6 +15,7 @@ from core.platform import platform_svc
 
 INTERVAL = 4.0  # s between checks
 STALL = 24.0  # s without a new frame before the page is reloaded
+STARTUP_STALL = 8.0  # s to wait for the first page paint after opening
 EVAL_TIMEOUT = 4.0  # s: a page that cannot answer at all counts as stalled
 _TIMEOUT = object()
 
@@ -35,7 +36,7 @@ def _evaluate(window, js):
 
 
 def _loop(window, url, stop):
-    last_frames, stalled_since = None, None
+    last_frames, stalled_since, saw_page = None, None, False
     while not stop.wait(INTERVAL):
         if not platform_svc.window_is_showing(window):
             last_frames = stalled_since = None
@@ -44,11 +45,15 @@ def _loop(window, url, stop):
         alive = isinstance(value, (list, tuple)) and len(value) == 2
         frames, dirty = (value if alive else (None, False))
         if alive and frames != last_frames:
-            last_frames, stalled_since = frames, None
+            last_frames, stalled_since, saw_page = frames, None, True
             continue
         now = time.monotonic()
         stalled_since = stalled_since or now
-        if now - stalled_since < STALL or dirty:
+        # A launch that never reaches JavaScript is different from an already
+        # rendered page that later stalls: recover the former quickly instead
+        # of showing a black window for the normal 24-second watchdog delay.
+        limit = STALL if saw_page else STARTUP_STALL
+        if now - stalled_since < limit or dirty:
             continue
         last_frames = stalled_since = None
         try:

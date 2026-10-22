@@ -6,6 +6,19 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.7.0] - 2026-10-22
+
+### ✨ Nouveautés
+- **Variables d'environnement des sous-dossiers** : l'onglet Env cherche les `.env` dans tout le projet (monorepo : `backend/`, `frontend/`…), groupés par dossier avec le type de projet reconnu (Node, Java Maven, Python, Go, PHP, Docker…). On voit de quel dossier vient chaque fichier, et « Nouveau .env » crée un fichier au bon endroit
+- **Requêtes SQL en onglets** : plusieurs requêtes en parallèle, chacune avec son texte et son résultat, retrouvées au redémarrage
+- **Onglet Code** : la recherche (Ctrl+F) marche aussi en mode Modifier, avec les occurrences surlignées et Entrée / Maj+Entrée pour passer de l'une à l'autre ; autocomplétion dans l'éditeur
+- Le plein écran du Code, de la base de données, du diagramme et du terminal s'arrête sous la barre d'onglets, qui reste utilisable
+
+### 🐛 Corrections
+- Navigateur de Dev Hub : en quittant le plein écran (F11), la fenêtre retrouve son accrochage aux bords de l'écran (Snap), sa bordure et ses coins arrondis
+- Sessions IA : le terminal démarre à la bonne taille, la première image de Claude Code ne sort plus décalée
+- Fenêtre noire au démarrage : détectée et rechargée plus vite (8 s au lieu de 24 s), et la page est servie sur l'adresse IPv4 directe pour éviter un premier chargement qui restait noir
+
 ## [0.6.3] - 2026-10-20
 
 ### 🐛 Corrections

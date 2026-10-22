@@ -830,3 +830,22 @@ body {
 .no-scrollbar::-webkit-scrollbar {
   display: none;
 }
+
+/* "Full screen" panels: the whole window except the title bar with the tabs. */
+.fullscreen-below-tabs {
+  position: fixed;
+  top: var(--titlebar-h, 0px);
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+
+/* Ctrl+F matches inside the code editor (codeEditor.jsx). */
+.code-find-mark {
+  color: transparent;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--color-warning) 35%, transparent);
+}
+.code-find-mark.cur {
+  background: color-mix(in srgb, var(--color-warning) 75%, transparent);
+}

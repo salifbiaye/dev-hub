@@ -23,6 +23,10 @@ def _set_fullscreen(win, value):
     # toggle_fullscreen() is synchronous (it Invokes onto the UI thread and
     # blocks until done), so is_fullscreen is already current here.
     is_fs = _is_window_fullscreen(win)
+    if not is_fs:
+        # pywebview's exit path leaves a frameless, square window: put the
+        # Windows frame back (Snap, border, rounded corners).
+        platform_svc.enable_native_frame(win)
     win.evaluate_js(f"window.dispatchEvent(new CustomEvent('devhub-fullscreen', {{detail: {str(is_fs).lower()}}}))")
 
 

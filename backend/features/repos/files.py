@@ -134,16 +134,86 @@ class ReposFilesMixin:
             return {"error": str(e)}
         return {"ok": True, "size": file_path.stat().st_size}
 
+    # Folders never worth looking into for .env files: dependency caches and
+    # build output (a .env copied into dist/ or target/ is not "the" .env).
+    ENV_SKIP_DIRS = CODE_BROWSER_SKIP_DIRS | {
+        "dist", "build", "out", "target", ".next", ".nuxt", ".output", ".svelte-kit", ".angular",
+        ".turbo", ".cache", ".gradle", ".idea", ".vscode", "coverage", "vendor", "bin", "obj",
+        "site-packages", ".pytest_cache", ".mypy_cache", ".tox",
+    }
+    ENV_MAX_DEPTH = 5
+    ENV_MAX_DIRS = 4000
+    # A folder holding one of these files is a project of its own (a monorepo's
+    # back end, front end…) — used to say what a .env belongs to.
+    PROJECT_MARKERS = (
+        ("package.json", "Node"),
+        ("pom.xml", "Java · Maven"),
+        ("build.gradle", "Java · Gradle"),
+        ("build.gradle.kts", "Kotlin · Gradle"),
+        ("manage.py", "Django"),
+        ("pyproject.toml", "Python"),
+        ("requirements.txt", "Python"),
+        ("go.mod", "Go"),
+        ("composer.json", "PHP"),
+        ("Cargo.toml", "Rust"),
+        ("Gemfile", "Ruby"),
+        ("pubspec.yaml", "Flutter"),
+        ("docker-compose.yml", "Docker"),
+        ("docker-compose.yaml", "Docker"),
+        ("Dockerfile", "Docker"),
+    )
+
+    @staticmethod
+    def _is_env_name(name):
+        # .env, .env.local, .env.production… — not direnv's .envrc script.
+        return name.startswith(".env") and name != ".envrc"
+
+    def _project_kind(self, names):
+        for marker, label in self.PROJECT_MARKERS:
+            if marker in names:
+                return label
+        return None
+
     def list_env_files(self, path):
-        p = Path(path)
-        if not p.exists():
-            return []
-        return sorted(f.name for f in p.iterdir() if f.is_file() and f.name.startswith(".env"))
+        """Every .env* file of the project, subfolders included, grouped by
+        folder, plus the folders where a new one could be created."""
+        base = Path(path)
+        if not base.is_dir():
+            return {"files": [], "folders": []}
+        files, folders, visited = [], [], 0
+        for root, dirs, names in os.walk(base):
+            rel_dir = Path(root).relative_to(base)
+            depth = 0 if str(rel_dir) == "." else len(rel_dir.parts)
+            dirs[:] = sorted(d for d in dirs if d not in self.ENV_SKIP_DIRS and not d.startswith(".git"))
+            if depth >= self.ENV_MAX_DEPTH:
+                dirs[:] = []
+            visited += 1
+            if visited > self.ENV_MAX_DIRS:
+                break
+            dir_key = "" if depth == 0 else rel_dir.as_posix()
+            kind = self._project_kind(set(names))
+            env_names = sorted(n for n in names if self._is_env_name(n) and (Path(root) / n).is_file())
+            if env_names or kind or depth == 0:
+                folders.append({"dir": dir_key, "kind": kind, "has_env": bool(env_names)})
+            for n in env_names:
+                files.append({"path": f"{dir_key}/{n}" if dir_key else n, "dir": dir_key, "name": n})
+        # Root first, then folders alphabetically; ".env" before its variants.
+        files.sort(key=lambda f: (f["dir"] != "", f["dir"].lower(), f["name"] != ".env", f["name"]))
+        folders.sort(key=lambda f: (f["dir"] != "", f["dir"].lower()))
+        return {"files": files, "folders": folders}
 
     def _env_file_path(self, path, filename):
-        if not filename or not filename.startswith(".env") or "/" in filename or "\\" in filename:
+        """A .env* file inside the project, given relative ('backend/.env')."""
+        if not filename:
             return None
-        return Path(path) / filename
+        parts = [p for p in str(filename).replace("\\", "/").split("/")]
+        if any(p in ("", ".", "..") for p in parts) or not self._is_env_name(parts[-1]):
+            return None
+        base = Path(path).resolve()
+        target = (base / Path(*parts)).resolve()
+        if base not in target.parents:
+            return None
+        return target
 
     def read_env_file(self, path, filename):
         file_path = self._env_file_path(path, filename)

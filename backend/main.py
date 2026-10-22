@@ -69,13 +69,11 @@ def main():
         browser_window.set_own_ui_base(ui_base)
     else:
         own_port = serve_own_ui(ui_dist_dir())
-        # "localhost", not the literal 127.0.0.1 it resolves to — the two
-        # are different *sites* to Chromium's cookie/storage partitioning
-        # even though they're the same machine, so a previewed dev server
-        # on http://localhost:3000 would still be cross-site (and get its
-        # cookies isolated on a hard reload) against a 127.0.0.1 top-level
-        # page. Matching hostnames puts both under the same site.
-        own_ui_base = f"http://localhost:{own_port}"
+        # The server binds to the IPv4 loopback address.  Use that exact host
+        # in the WebView URL too: resolving `localhost` can pick ::1 first on
+        # Windows, where nothing is listening, and intermittently leaves an
+        # otherwise healthy WebView2 window black on first navigation.
+        own_ui_base = f"http://127.0.0.1:{own_port}"
         browser_window.set_own_ui_base(own_ui_base)
         ui_base = own_ui_base
         target = f"{own_ui_base}/index.html"

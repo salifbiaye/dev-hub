@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { marked } from 'marked'
 
 function api() {
@@ -44,10 +44,119 @@ export const draftStore = {
  * share the exact same font metrics and padding; the pre follows the
  * textarea's scroll.
  */
-export function CodeEditor({ value, onChange, onSave, highlight }) {
+// Wraps every occurrence of `term` in <mark>; the one on `activeLine` (first
+// occurrence) gets the stronger style. Same text as the textarea, so the
+// marks sit exactly under the matching words.
+function findMarks(value, term, activeLine) {
+  const lower = term.toLowerCase()
+  return (
+    value
+      .split('\n')
+      .map((line, i) => {
+        const low = line.toLowerCase()
+        let at = low.indexOf(lower)
+        if (at === -1) return escapeHtml(line)
+        let out = ''
+        let from = 0
+        let first = true
+        while (at !== -1) {
+          out += escapeHtml(line.slice(from, at))
+          const cls = i === activeLine && first ? 'code-find-mark cur' : 'code-find-mark'
+          out += `<mark class="${cls}">${escapeHtml(line.slice(at, at + lower.length))}</mark>`
+          from = at + lower.length
+          first = false
+          at = low.indexOf(lower, from)
+        }
+        return out + escapeHtml(line.slice(from))
+      })
+      .join('\n') + '\n'
+  )
+}
+
+const LANGUAGE_WORDS = {
+  javascript: ['import', 'export', 'from', 'const', 'let', 'function', 'return', 'async', 'await', 'class', 'extends', 'if', 'else', 'for', 'while', 'new', 'try', 'catch'],
+  jsx: ['import', 'export', 'from', 'const', 'function', 'return', 'useState', 'useEffect', 'useMemo', 'useCallback', 'props', 'className'],
+  typescript: ['import', 'export', 'from', 'const', 'let', 'interface', 'type', 'function', 'return', 'async', 'await', 'class', 'public', 'private'],
+  tsx: ['import', 'export', 'from', 'const', 'interface', 'type', 'function', 'return', 'useState', 'useEffect', 'className'],
+  python: ['import', 'from', 'as', 'def', 'class', 'return', 'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'with', 'async', 'await', 'True', 'False', 'None'],
+  java: ['package', 'import', 'public', 'private', 'class', 'interface', 'extends', 'implements', 'static', 'void', 'return', 'new', 'if', 'else'],
+  css: ['display', 'position', 'color', 'background', 'margin', 'padding', 'width', 'height', 'flex', 'grid', 'border', 'font-size'],
+  html: ['div', 'span', 'button', 'input', 'section', 'main', 'header', 'class', 'id', 'href', 'src'],
+  sql: ['SELECT', 'FROM', 'WHERE', 'JOIN', 'LEFT', 'RIGHT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 'ORDER', 'GROUP', 'LIMIT'],
+}
+
+function wordBefore(value, cursor) {
+  return (value.slice(0, cursor).match(/[A-Za-z_$][\w$]*$/) || [''])[0]
+}
+
+function indentWidth(language) {
+  return language === 'python' ? '    ' : '  '
+}
+
+function relativeImport(fromFile, target) {
+  const from = fromFile.split('/').slice(0, -1)
+  const to = target.split('/')
+  while (from.length && to.length && from[0] === to[0]) {
+    from.shift()
+    to.shift()
+  }
+  return `${from.length ? '../'.repeat(from.length) : './'}${to.join('/')}`
+}
+
+function completionItems(value, cursor, language, file, projectFiles) {
+  const before = value.slice(0, cursor)
+  const line = before.slice(before.lastIndexOf('\n') + 1)
+  const imported = line.match(/(?:from\s*|import\s*)['"]([^'"]*)$/)
+  if (imported) {
+    const typed = imported[1].toLowerCase()
+    const entries = projectFiles
+      .filter((p) => p !== file && /\.(?:[cm]?[jt]sx?|py|java|css|scss|json)$/i.test(p))
+      .map((p) => relativeImport(file, p))
+      .filter((p) => p.toLowerCase().includes(typed))
+      .slice(0, 12)
+    return { from: cursor - imported[1].length, items: [...new Set(entries)] }
+  }
+  const word = wordBefore(value, cursor)
+  if (!word) return { from: cursor, items: [] }
+  const symbols = [...value.matchAll(/\b(?:function|class|const|let|def|interface|type)\s+([A-Za-z_$][\w$]*)/g)].map((m) => m[1])
+  const choices = [...new Set([...(LANGUAGE_WORDS[language] || []), ...symbols])]
+    .filter((item) => item.toLowerCase().startsWith(word.toLowerCase()) && item !== word)
+    .slice(0, 10)
+  return { from: cursor - word.length, items: choices }
+}
+
+function referenceTarget(value, cursor, file, projectFiles) {
+  const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
+  const lineEnd = value.indexOf('\n', cursor)
+  const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd)
+  const quote = [...line.matchAll(/['"]([^'"]+)['"]/g)].find((m) => {
+    const at = lineStart + m.index
+    return cursor >= at && cursor <= at + m[0].length
+  })
+  if (quote) {
+    const raw = quote[1]
+    const base = file.split('/').slice(0, -1)
+    for (const part of raw.split('/')) {
+      if (!part || part === '.') continue
+      if (part === '..') base.pop()
+      else base.push(part)
+    }
+    const candidate = base.join('/')
+    return projectFiles.find((p) => p === candidate || p.replace(/\.[^.]+$/, '') === candidate || p.startsWith(`${candidate}/index.`))
+  }
+  const token = wordBefore(value, cursor) || (value.slice(cursor).match(/^[A-Za-z_$][\w$]*/) || [''])[0]
+  if (!token) return null
+  const lower = token.toLowerCase()
+  return projectFiles.find((p) => p.split('/').pop().replace(/\.[^.]+$/, '').toLowerCase() === lower)
+    || projectFiles.find((p) => p.toLowerCase().includes(`/${lower}.`))
+}
+
+export function CodeEditor({ value, onChange, onSave, highlight, language, file, projectFiles = [], onOpenFile, onNotify, findTerm = '', findLine = -1, ref }) {
   const taRef = useRef(null)
+  const markRef = useRef(null)
   const preRef = useRef(null)
   const gutterRef = useRef(null)
+  const [completion, setCompletion] = useState({ from: 0, items: [], active: 0, left: 12, top: 28 })
 
   const lineCount = useMemo(() => value.split('\n').length, [value])
   const html = useMemo(
@@ -63,11 +172,79 @@ export function CodeEditor({ value, onChange, onSave, highlight }) {
     taRef.current?.focus()
   }, [])
 
+  const marks = useMemo(() => (findTerm ? findMarks(value, findTerm, findLine) : null), [value, findTerm, findLine])
+
+  // Scroll a search match into view (line height 20 px, ~7.2 px per column).
+  useImperativeHandle(ref, () => ({
+    reveal(line, col) {
+      const ta = taRef.current
+      if (!ta) return
+      ta.scrollTop = Math.max(0, line * 20 - ta.clientHeight / 2)
+      const x = col * 7.2
+      if (x < ta.scrollLeft || x > ta.scrollLeft + ta.clientWidth - 60) ta.scrollLeft = Math.max(0, x - 80)
+    },
+  }))
+
   function syncScroll() {
     const ta = taRef.current
     if (!ta) return
-    if (preRef.current) preRef.current.style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`
+    const t = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`
+    if (preRef.current) preRef.current.style.transform = t
+    if (markRef.current) markRef.current.style.transform = t
     if (gutterRef.current) gutterRef.current.style.transform = `translateY(${-ta.scrollTop}px)`
+  }
+
+  function refreshCompletion(text, cursor) {
+    const next = completionItems(text, cursor, language, file, projectFiles)
+    const ta = taRef.current
+    // The textarea and the syntax layer deliberately share fixed monospace
+    // metrics (7.2 px per character, 20 px per line). This gives us a stable
+    // caret anchor without a second hidden editor or a heavyweight IDE.
+    const before = text.slice(0, cursor)
+    const lineStart = before.lastIndexOf('\n') + 1
+    const line = before.split('\n').length - 1
+    const column = before.length - lineStart
+    const wantedLeft = 12 + column * 7.2 - (ta?.scrollLeft || 0)
+    const wantedTop = 8 + (line + 1) * 20 - (ta?.scrollTop || 0)
+    const left = Math.max(8, Math.min((ta?.clientWidth || 320) - 296, wantedLeft))
+    const top = Math.max(4, Math.min((ta?.clientHeight || 200) - 180, wantedTop))
+    setCompletion({ ...next, active: 0, left, top })
+  }
+
+  function acceptCompletion(index = completion.active) {
+    const ta = taRef.current
+    const item = completion.items[index]
+    if (!ta || !item) return false
+    const next = value.slice(0, completion.from) + item + value.slice(ta.selectionEnd)
+    const caret = completion.from + item.length
+    onChange(next)
+    requestAnimationFrame(() => ta.setSelectionRange(caret, caret))
+    setCompletion({ from: caret, items: [], active: 0, left: completion.left, top: completion.top })
+    return true
+  }
+
+  function openReference() {
+    const ta = taRef.current
+    if (!ta) return
+    const target = referenceTarget(value, ta.selectionStart, file, projectFiles)
+    if (target) onOpenFile?.(target)
+    else onNotify?.('Référence locale introuvable')
+  }
+
+  function indentSelection(outdent = false) {
+    const ta = taRef.current
+    if (!ta) return
+    const start = ta.selectionStart
+    const end = ta.selectionEnd
+    const first = value.lastIndexOf('\n', start - 1) + 1
+    const last = value.indexOf('\n', end)
+    const until = last === -1 ? value.length : last
+    const block = value.slice(first, until)
+    const unit = indentWidth(language)
+    const updated = block.split('\n').map((line) => outdent ? line.replace(new RegExp(`^(?:${unit}|\\t)`), '') : unit + line).join('\n')
+    onChange(value.slice(0, first) + updated + value.slice(until))
+    const delta = updated.length - block.length
+    requestAnimationFrame(() => ta.setSelectionRange(start + (outdent ? Math.min(0, delta) : unit.length), end + delta))
   }
 
   function handleKeyDown(e) {
@@ -78,8 +255,51 @@ export function CodeEditor({ value, onChange, onSave, highlight }) {
     }
     if (e.key === 'Tab' && !e.ctrlKey && !e.altKey) {
       e.preventDefault()
+      if (completion.items.length && !e.shiftKey && acceptCompletion()) return
+      if (e.shiftKey || taRef.current?.selectionStart !== taRef.current?.selectionEnd) {
+        indentSelection(e.shiftKey)
+        return
+      }
       // execCommand keeps the edit on the textarea's native undo stack.
-      document.execCommand('insertText', false, '  ')
+      document.execCommand('insertText', false, indentWidth(language))
+      return
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === ' ') {
+      e.preventDefault()
+      refreshCompletion(value, taRef.current?.selectionStart ?? 0)
+      return
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault()
+      openReference()
+      return
+    }
+    if (completion.items.length && e.key === 'ArrowDown') {
+      e.preventDefault()
+      setCompletion((c) => ({ ...c, active: (c.active + 1) % c.items.length }))
+      return
+    }
+    if (completion.items.length && e.key === 'ArrowUp') {
+      e.preventDefault()
+      setCompletion((c) => ({ ...c, active: (c.active - 1 + c.items.length) % c.items.length }))
+      return
+    }
+    if (completion.items.length && e.key === 'Escape') {
+      setCompletion((c) => ({ ...c, items: [] }))
+      return
+    }
+    if (completion.items.length && e.key === 'Enter' && acceptCompletion()) {
+      e.preventDefault()
+      return
+    }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const ta = taRef.current
+      const before = value.slice(0, ta.selectionStart)
+      const line = before.slice(before.lastIndexOf('\n') + 1)
+      const indentation = (line.match(/^\s*/) || [''])[0]
+      const extra = /[({[]\s*$/.test(line) || (language === 'python' && /:\s*$/.test(line)) ? indentWidth(language) : ''
+      document.execCommand('insertText', false, `\n${indentation}${extra}`)
     }
   }
 
@@ -94,6 +314,14 @@ export function CodeEditor({ value, onChange, onSave, highlight }) {
         </div>
       </div>
       <div className="relative flex-1 overflow-hidden">
+        {marks && (
+          <pre
+            ref={markRef}
+            aria-hidden
+            className={`pointer-events-none absolute top-0 left-0 m-0 min-w-full text-transparent ${metrics}`}
+            dangerouslySetInnerHTML={{ __html: marks }}
+          />
+        )}
         <pre
           ref={preRef}
           aria-hidden
@@ -103,15 +331,39 @@ export function CodeEditor({ value, onChange, onSave, highlight }) {
         <textarea
           ref={taRef}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
-          onScroll={syncScroll}
+          onChange={(e) => {
+            onChange(e.target.value)
+            refreshCompletion(e.target.value, e.target.selectionStart)
+          }}
+          onScroll={() => {
+            syncScroll()
+            setCompletion((c) => (c.items.length ? { ...c, items: [] } : c))
+          }}
           onKeyDown={handleKeyDown}
+          onDoubleClick={() => setTimeout(openReference, 0)}
           wrap="off"
           spellCheck={false}
           autoCapitalize="off"
           autoComplete="off"
           className={`theme-scroll absolute inset-0 h-full w-full resize-none overflow-auto border-none bg-transparent text-transparent caret-[var(--color-text)] outline-none selection:bg-accent/30 ${metrics}`}
         />
+        {completion.items.length > 0 && (
+          <div
+            className="absolute z-20 w-72 overflow-hidden rounded-md border border-border bg-surface shadow-xl"
+            style={{ left: completion.left, top: completion.top }}
+          >
+            <div className="border-b border-border px-2 py-1 text-[10px] text-muted">Suggestions · Tab pour compléter</div>
+            {completion.items.map((item, i) => (
+              <button
+                key={item}
+                onMouseDown={(e) => { e.preventDefault(); acceptCompletion(i) }}
+                className={`block w-full cursor-pointer truncate px-2 py-1 text-left font-mono text-xs ${i === completion.active ? 'bg-accent/25 text-text' : 'text-muted hover:bg-surface-hover hover:text-text'}`}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

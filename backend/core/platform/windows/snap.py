@@ -111,9 +111,31 @@ def _maximized_top_inset(hwnd):
     return user32.GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi) + user32.GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi)
 
 
+def _apply_frame(hwnd):
+    # The caption/thick-frame styles that make it an OS window (Snap, edge
+    # resize), the border color, and Windows' own rounded corners. Run again
+    # after pywebview's F11: entering fullscreen it clears the border style
+    # and turns the rounding off, and leaving it restores the *frameless*
+    # style it started from — so all of this is gone until re-applied.
+    style = user32.GetWindowLongPtrW(hwnd, GWL_STYLE) or 0
+    style |= WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
+    user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style)
+    _apply_dwm_border(hwnd)
+    try:
+        default_corners = ctypes.c_uint(0)  # DWMWCP_DEFAULT
+        dwmapi.DwmSetWindowAttribute(wintypes.HWND(hwnd), 33, ctypes.byref(default_corners), ctypes.sizeof(default_corners))
+    except Exception:
+        pass
+    user32.SetWindowPos(
+        hwnd, None, 0, 0, 0, 0,
+        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+    )
+
+
 def _install(form):
     hwnd = form.Handle.ToInt64()
     if hwnd in _subclassed:
+        _apply_frame(hwnd)
         return
     old_proc = user32.GetWindowLongPtrW(hwnd, GWL_WNDPROC)
 
@@ -147,15 +169,7 @@ def _install(form):
     # very first frame calculation already goes through wnd_proc.
     user32.SetWindowLongPtrW(hwnd, GWL_WNDPROC, ctypes.cast(callback, ctypes.c_void_p))
     _subclassed[hwnd] = (callback, old_proc)
-
-    style = user32.GetWindowLongPtrW(hwnd, GWL_STYLE) or 0
-    style |= WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX
-    user32.SetWindowLongPtrW(hwnd, GWL_STYLE, style)
-    _apply_dwm_border(hwnd)
-    user32.SetWindowPos(
-        hwnd, None, 0, 0, 0, 0,
-        SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-    )
+    _apply_frame(hwnd)
 
 
 def enable_native_frame(win):

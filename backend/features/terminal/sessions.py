@@ -231,7 +231,7 @@ class TerminalMixin:
         sessions.sort(key=lambda s: s["modified"], reverse=True)
         return sessions
 
-    def start_terminal(self, path, session_id=None, prompt=None):
+    def start_terminal(self, path, session_id=None, prompt=None, rows=24, cols=80):
         # cli_command is tuned for the one-shot commit-message call (e.g. "claude -p")
         # and its flags (-p/exec/...) are incompatible with an interactive session —
         # only the bare binary should be launched here.
@@ -260,8 +260,19 @@ class TerminalMixin:
         env["COLORTERM"] = "truecolor"
         env["FORCE_COLOR"] = "1"
 
+        # Claude Code draws a full-screen TUI as soon as it starts.  Starting
+        # it at the historical 80x24 fallback and resizing it a moment later
+        # leaves its first layout (input box, separators and status row) out
+        # of sync with xterm.  The browser now gives us its fitted dimensions
+        # before spawning the process, so its first draw matches the visible
+        # terminal just like Windows Terminal does.
         try:
-            proc = platform_svc.spawn_pty(argv, path, env, 24, 80)
+            rows = max(2, min(int(rows), 500))
+            cols = max(20, min(int(cols), 1000))
+        except (TypeError, ValueError):
+            rows, cols = 24, 80
+        try:
+            proc = platform_svc.spawn_pty(argv, path, env, rows, cols)
         except Exception as e:
             return {"error": str(e)}
 
