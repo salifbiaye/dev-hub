@@ -1,6 +1,7 @@
 import base64
 import mimetypes
 import os
+import shutil
 from pathlib import Path
 
 from app_config import load_config
@@ -133,6 +134,27 @@ class ReposFilesMixin:
         except OSError as e:
             return {"error": str(e)}
         return {"ok": True, "size": file_path.stat().st_size}
+
+    def delete_repo_path(self, path, rel):
+        """Delete a file or a whole folder of a repo Dev Hub knows about
+        (Code tab). Permanent — the UI asks for confirmation first. Never the
+        repo root nor anything inside .git."""
+        known = {str(Path(r["path"]).resolve()) for r in load_config()["repos"]}
+        if str(Path(path).resolve()) not in known or not safe_repo_file(path, rel):
+            return {"error": "Chemin invalide"}
+        if ".git" in Path(rel).parts:
+            return {"error": "Le dossier .git ne peut pas être supprimé ici"}
+        target = Path(path) / rel
+        try:
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+            elif target.is_dir():
+                shutil.rmtree(target)
+            else:
+                return {"error": "Introuvable"}
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True}
 
     # Folders never worth looking into for .env files: dependency caches and
     # build output (a .env copied into dist/ or target/ is not "the" .env).

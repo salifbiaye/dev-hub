@@ -125,16 +125,13 @@ function completionItems(value, cursor, language, file, projectFiles) {
   return { from: cursor - word.length, items: choices }
 }
 
-function referenceTarget(value, cursor, file, projectFiles) {
-  const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
-  const lineEnd = value.indexOf('\n', cursor)
-  const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd)
-  const quote = [...line.matchAll(/['"]([^'"]+)['"]/g)].find((m) => {
-    const at = lineStart + m.index
-    return cursor >= at && cursor <= at + m[0].length
-  })
-  if (quote) {
-    const raw = quote[1]
+// Where an import specifier points inside the project: relative paths, and
+// the usual root aliases (@/, ~/, #/ → src/ or the repo root). Packages
+// (react, expo-router…) resolve to nothing.
+function resolveSpecifier(raw, file, projectFiles) {
+  const matches = (p, candidate) =>
+    p === candidate || p.replace(/\.[^.]+$/, '') === candidate || p.startsWith(`${candidate}/index.`)
+  if (raw.startsWith('.')) {
     const base = file.split('/').slice(0, -1)
     for (const part of raw.split('/')) {
       if (!part || part === '.') continue
@@ -142,10 +139,73 @@ function referenceTarget(value, cursor, file, projectFiles) {
       else base.push(part)
     }
     const candidate = base.join('/')
-    return projectFiles.find((p) => p === candidate || p.replace(/\.[^.]+$/, '') === candidate || p.startsWith(`${candidate}/index.`))
+    return projectFiles.find((p) => matches(p, candidate)) || null
   }
-  const token = wordBefore(value, cursor) || (value.slice(cursor).match(/^[A-Za-z_$][\w$]*/) || [''])[0]
+  const alias = raw.match(/^[@~#]\/(.+)$/)
+  if (!alias) return null
+  const rest = alias[1]
+  // A monorepo's app lives in a subfolder (portfolio/src/…): the alias is
+  // relative to the package root, taken from the current file's own src/.
+  const at = `/${file}`.indexOf('/src/')
+  const root = at > 0 ? file.slice(0, at - 1) + '/' : ''
+  return (
+    projectFiles.find((p) => matches(p, `${root}src/${rest}`)) ||
+    projectFiles.find((p) => matches(p, `${root}${rest}`)) ||
+    projectFiles.find((p) => matches(p, `src/${rest}`)) ||
+    projectFiles.find((p) => matches(p, rest)) ||
+    projectFiles.find((p) => /(?:^|\/)src\//.test(p) && matches(p.slice(p.indexOf('src/')), `src/${rest}`)) ||
+    null
+  )
+}
+
+// name → import specifier, for every binding the file imports.
+function importBindings(source) {
+  const map = new Map()
+  for (const m of source.matchAll(/import\s+([^'";]+?)\s+from\s+['"]([^'"]+)['"]/g)) {
+    const clause = m[1].replace(/^type\s+/, '')
+    const named = clause.match(/\{([^}]*)\}/)
+    if (named) {
+      for (const item of named[1].split(',')) {
+        const name = item.trim().replace(/^type\s+/, '').split(/\s+as\s+/).pop().trim()
+        if (name) map.set(name, m[2])
+      }
+    }
+    const rest = clause.replace(/\{[^}]*\}/, '').replace(/\*\s+as\s+/, '')
+    for (const name of rest.split(',').map((t) => t.trim()).filter(Boolean)) map.set(name, m[2])
+  }
+  for (const m of source.matchAll(/(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*['"]([^'"]+)['"]\s*\)/g)) map.set(m[1], m[2])
+  for (const m of source.matchAll(/^\s*from\s+(\.+[\w.]*)\s+import\s+([\w, ]+)/gm)) {
+    const dots = m[1].match(/^\.+/)[0].length
+    const mod = m[1].slice(dots).replace(/\./g, '/')
+    const spec = `${dots === 1 ? './' : '../'.repeat(dots - 1)}${mod}`
+    for (const name of m[2].split(',').map((t) => t.trim().split(/\s+as\s+/).pop()).filter(Boolean)) map.set(name, spec)
+  }
+  return map
+}
+
+function wordAt(value, cursor) {
+  const before = (value.slice(0, cursor).match(/[A-Za-z_$][\w$]*$/) || [''])[0]
+  const after = (value.slice(cursor).match(/^[\w$]*/) || [''])[0]
+  return before + after
+}
+
+// `source` is the whole file (the click handler may only hand us one line).
+export function referenceTarget(value, cursor, file, projectFiles, source = value) {
+  const lineStart = value.lastIndexOf('\n', cursor - 1) + 1
+  const lineEnd = value.indexOf('\n', cursor)
+  const line = value.slice(lineStart, lineEnd === -1 ? value.length : lineEnd)
+  const quote = [...line.matchAll(/['"]([^'"]+)['"]/g)].find((m) => {
+    const at = m.index
+    return cursor - lineStart >= at && cursor - lineStart <= at + m[0].length
+  })
+  if (quote) return resolveSpecifier(quote[1], file, projectFiles) || undefined
+  const token = wordAt(value, cursor)
   if (!token) return null
+  const spec = importBindings(source).get(token)
+  if (spec) {
+    const resolved = resolveSpecifier(spec, file, projectFiles)
+    if (resolved) return resolved
+  }
   const lower = token.toLowerCase()
   return projectFiles.find((p) => p.split('/').pop().replace(/\.[^.]+$/, '').toLowerCase() === lower)
     || projectFiles.find((p) => p.toLowerCase().includes(`/${lower}.`))
@@ -340,6 +400,10 @@ export function CodeEditor({ value, onChange, onSave, highlight, language, file,
             setCompletion((c) => (c.items.length ? { ...c, items: [] } : c))
           }}
           onKeyDown={handleKeyDown}
+          onClick={(e) => {
+            // Ctrl/Cmd+clic on an import or a name opens the file it points to.
+            if (e.ctrlKey || e.metaKey) openReference()
+          }}
           onDoubleClick={() => setTimeout(openReference, 0)}
           wrap="off"
           spellCheck={false}

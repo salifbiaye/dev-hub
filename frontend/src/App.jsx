@@ -81,6 +81,7 @@ import {
   IconMonitor,
   IconMaximize,
   IconSplitRight,
+  IconKey,
   IconSplitDown,
   IconWinMinimize,
   IconWinMaximize,
@@ -94,7 +95,7 @@ import {
   IconPalette,
   IconPlay,
 } from './icons'
-import { CodeEditor, FilePreview, draftStore, previewKindForFile } from './codeEditor'
+import { CodeEditor, FilePreview, draftStore, previewKindForFile, referenceTarget } from './codeEditor'
 import { HubiTasksModal } from './hubiTasks'
 import { HubiPage } from './hubiPanel'
 
@@ -550,6 +551,7 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
   const [pendingFile, setPendingFile] = useState(null) // file to open once unsaved edits are dropped
   const [activeFile, setActiveFile] = useState(null)
   const [entries, setEntries] = useState([])
+  const [original, setOriginal] = useState([]) // entries as last saved/loaded, to show pending changes
   const [revealed, setRevealed] = useState(() => new Set())
   const [dirty, setDirty] = useState(false)
 
@@ -573,10 +575,12 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
   const loadEntries = useCallback(async () => {
     if (!activeFile) {
       setEntries([])
+      setOriginal([])
       return
     }
     const result = await api().read_env_file(repo.path, activeFile)
     setEntries(result?.entries || [])
+    setOriginal(result?.entries || [])
     setRevealed(new Set())
     setDirty(false)
   }, [repo.path, activeFile])
@@ -661,16 +665,22 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
   }, [files, folders])
   const active = files.find((f) => f.path === activeFile) || null
 
+  // Pending edits versus what's on disk, keyed by variable name.
+  const changes = useMemo(() => {
+    const before = new Map(original.map((e) => [e.key, e.value]))
+    const now = new Map(entries.filter((e) => e.key.trim()).map((e) => [e.key, e.value]))
+    const list = []
+    for (const [key, value] of now) {
+      if (!before.has(key)) list.push({ key, value, kind: 'added' })
+      else if (before.get(key) !== value) list.push({ key, value, kind: 'updated' })
+    }
+    for (const [key, value] of before) if (!now.has(key)) list.push({ key, value, kind: 'removed' })
+    return list
+  }, [original, entries])
+
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between">
-        <h3 className="text-xs font-medium uppercase tracking-wider text-muted">Variables d'environnement</h3>
-        {dirty && (
-          <Button variant="primary" onClick={save}>
-            Enregistrer
-          </Button>
-        )}
-      </div>
+      <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-muted">Variables d'environnement</h3>
 
       {files.length === 0 ? (
         <div className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-3">
@@ -688,44 +698,90 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-3 md:flex-row md:items-start">
-          <div className="flex shrink-0 flex-col gap-2 md:w-60">
-            <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-1.5">
-              {groups.map((g) => (
-                <div key={g.dir || '/'} className="flex flex-col gap-0.5">
-                  <div
-                    className="flex min-w-0 items-center gap-1.5 px-2 py-1 text-[11.5px] text-muted"
-                    title={g.dir || repo.path}
-                  >
-                    <IconFolder className="h-3.5 w-3.5 shrink-0 text-accent" />
-                    <span className="truncate font-medium text-text">{folderLabel(g.dir)}</span>
-                    {g.kind && <span className="shrink-0 rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px]">{g.kind}</span>}
-                  </div>
-                  {g.files.map((f) => (
-                    <button
-                      key={f.path}
-                      onClick={() => openFile(f.path)}
-                      title={f.path}
-                      className={`ml-3 cursor-pointer truncate rounded-md border-l-2 px-2.5 py-1 text-left font-mono text-[12px] transition-colors duration-150 ${
-                        activeFile === f.path
-                          ? 'border-accent bg-accent-bg text-accent'
-                          : 'border-transparent text-muted hover:bg-surface-hover hover:text-text'
+        <div className="flex flex-col gap-4">
+          {changes.length > 0 && (
+            <div className="flex overflow-hidden rounded-lg border border-border bg-surface shadow-sm">
+              <div className="flex w-56 shrink-0 flex-col items-start justify-center gap-3 bg-accent-bg p-4">
+                <IconKey className="h-7 w-7 text-accent" />
+                <p className="text-[12.5px] font-medium text-text">
+                  {changes.length} modification{changes.length > 1 ? 's' : ''} prête{changes.length > 1 ? 's' : ''} à être appliquée{changes.length > 1 ? 's' : ''}.
+                </p>
+                <Button variant="primary" onClick={save}>
+                  Appliquer
+                </Button>
+              </div>
+              <div className="flex min-w-0 flex-1 flex-col divide-y divide-border">
+                {changes.map((c) => (
+                  <div key={c.key} className="flex items-center gap-3 px-4 py-2 text-[12px]">
+                    <span className="w-56 shrink-0 truncate font-mono italic text-muted" title={c.key}>
+                      {c.key}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-mono text-text">
+                      {c.kind === 'removed' ? '' : '•'.repeat(Math.min(c.value.length, 14)) || '—'}
+                    </span>
+                    <span
+                      className={`flex shrink-0 items-center gap-1 text-[11.5px] italic ${
+                        c.kind === 'added' ? 'text-success' : c.kind === 'updated' ? 'text-accent' : 'text-danger'
                       }`}
                     >
-                      {f.name}
-                    </button>
-                  ))}
+                      {c.kind === 'added' && <IconPlus className="h-3 w-3" />}
+                      {c.kind === 'updated' && <IconPencil className="h-3 w-3" />}
+                      {c.kind === 'removed' && <IconTrash className="h-3 w-3" />}
+                      {c.kind === 'added' ? 'Ajoutée' : c.kind === 'updated' ? 'Modifiée' : 'Supprimée'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="rounded-lg border border-border bg-surface">
+            <div className="divide-y divide-border">
+              {groups.map((g) => (
+                <div key={g.dir || '/'} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 px-3 py-2">
+                  <div className="flex w-48 shrink-0 items-center gap-1.5 text-[11.5px]" title={g.dir || repo.path}>
+                    <IconFolder className="h-3.5 w-3.5 shrink-0 text-accent" />
+                    <span className="truncate font-medium text-text">{folderLabel(g.dir)}</span>
+                    {g.kind && <span className="shrink-0 rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px] text-muted">{g.kind}</span>}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {g.files.map((f) => (
+                      <button
+                        key={f.path}
+                        onClick={() => openFile(f.path)}
+                        title={f.path}
+                        className={`cursor-pointer rounded-md border px-2.5 py-1 font-mono text-[12px] transition-colors duration-150 ${
+                          activeFile === f.path
+                            ? 'border-accent bg-accent-bg text-accent'
+                            : 'border-border text-muted hover:text-text hover:border-border-strong'
+                        }`}
+                      >
+                        {f.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
-            <div className="relative self-start">
+          </div>
+
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h4 className="text-sm font-semibold text-text">
+                {active ? <span className="font-mono">{active.path}</span> : 'Variables'}
+              </h4>
+              <p className="text-[11.5px] text-muted">
+                Paires clé / valeur lues par {active && active.dir !== '' ? 'ce dossier uniquement' : 'le projet'}.
+              </p>
+            </div>
+            <div className="relative">
               <Button variant="ghost" onClick={() => setNewMenuOpen((v) => !v)}>
                 <IconPlus className="h-3.5 w-3.5" />
                 Nouveau .env
               </Button>
               {newMenuOpen && (
                 <div
-                  className="absolute left-0 top-full z-20 mt-1 min-w-56 rounded-md border border-border-strong bg-surface p-1 shadow-lg"
+                  className="absolute right-0 top-full z-20 mt-1 min-w-56 rounded-md border border-border-strong bg-surface p-1 shadow-lg"
                   onMouseLeave={() => setNewMenuOpen(false)}
                 >
                   {folders.map((d) => {
@@ -749,46 +805,52 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
             </div>
           </div>
 
-          <div className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-lg border border-border bg-surface p-2">
-            {active && (
-              <p className="px-1 pb-1 text-[11px] text-muted">
-                Variables de <span className="font-mono text-text">{active.path}</span>
-                {active.dir !== '' && ' — lues par ce dossier uniquement'}
-              </p>
-            )}
-            {entries.length === 0 && <p className="px-2 py-1 text-xs text-muted">Fichier vide.</p>}
-            {entries.map((entry, i) => (
-              <div key={i} className="flex items-center gap-1.5">
-                <input
-                  value={entry.key}
-                  onChange={(e) => updateEntry(i, 'key', e.target.value)}
-                  placeholder="CLE"
-                  title={entry.key}
-                  className="w-64 shrink-0 rounded-md border border-border bg-base px-2 py-1.5 font-mono text-[12px] text-text outline-none focus:border-accent"
-                />
-                <input
-                  type={revealed.has(i) ? 'text' : 'password'}
-                  value={entry.value}
-                  onChange={(e) => updateEntry(i, 'value', e.target.value)}
-                  placeholder="valeur"
-                  className="min-w-0 flex-1 rounded-md border border-border bg-base px-2 py-1.5 font-mono text-[12px] text-text outline-none focus:border-accent"
-                />
-                <button
-                  onClick={() => toggleReveal(i)}
-                  className="text-muted hover:text-text cursor-pointer"
-                  title={revealed.has(i) ? 'Masquer' : 'Afficher'}
-                >
-                  {revealed.has(i) ? <IconEyeOff className="h-3.5 w-3.5" /> : <IconEye className="h-3.5 w-3.5" />}
-                </button>
-                <button onClick={() => removeEntry(i)} className="text-muted hover:text-danger cursor-pointer">
-                  <IconTrash className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            ))}
-            <Button variant="ghost" className="self-start" onClick={addEntry}>
-              <IconPlus className="h-3.5 w-3.5" />
-              Ajouter une variable
-            </Button>
+          <div className="overflow-hidden rounded-lg border border-border bg-surface">
+            <div className="flex items-center gap-3 border-b border-border bg-surface-hover px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted">
+              <span className="w-64 shrink-0 pl-6">Clé</span>
+              <span className="flex-1">Valeur</span>
+              <span className="w-14 shrink-0" />
+            </div>
+            <div className="divide-y divide-border">
+              {entries.length === 0 && <p className="px-3 py-3 text-xs text-muted">Fichier vide.</p>}
+              {entries.map((entry, i) => (
+                <div key={i} className="group flex items-center gap-3 px-3 py-1.5">
+                  <IconKey className="h-3.5 w-3.5 shrink-0 text-muted" />
+                  <input
+                    value={entry.key}
+                    onChange={(e) => updateEntry(i, 'key', e.target.value)}
+                    placeholder="CLE"
+                    title={entry.key}
+                    className="w-[15.5rem] shrink-0 rounded-md border border-transparent bg-transparent px-2 py-1.5 font-mono text-[12px] text-text outline-none hover:border-border focus:border-accent focus:bg-base"
+                  />
+                  <input
+                    type={revealed.has(i) ? 'text' : 'password'}
+                    value={entry.value}
+                    onChange={(e) => updateEntry(i, 'value', e.target.value)}
+                    placeholder="valeur"
+                    className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1.5 font-mono text-[12px] text-text outline-none hover:border-border focus:border-accent focus:bg-base"
+                  />
+                  <div className="flex w-14 shrink-0 items-center justify-end gap-2 text-muted">
+                    <button
+                      onClick={() => toggleReveal(i)}
+                      className="cursor-pointer hover:text-text"
+                      title={revealed.has(i) ? 'Masquer' : 'Afficher'}
+                    >
+                      {revealed.has(i) ? <IconEyeOff className="h-3.5 w-3.5" /> : <IconEye className="h-3.5 w-3.5" />}
+                    </button>
+                    <button onClick={() => removeEntry(i)} className="cursor-pointer hover:text-danger" title="Supprimer">
+                      <IconTrash className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <div className="border-t border-border p-2">
+              <Button variant="ghost" onClick={addEntry}>
+                <IconPlus className="h-3.5 w-3.5" />
+                Ajouter une variable
+              </Button>
+            </div>
           </div>
         </div>
       )}
@@ -4755,7 +4817,7 @@ function sortedTreeChildren(node) {
   })
 }
 
-function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSelectFile, repoPath, onNotify }) {
+function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSelectFile, repoPath, onNotify, onDelete }) {
   const indent = { paddingLeft: `${depth * 14 + 6}px` }
   const absolutePath = `${repoPath}\\${node.path.replace(/\//g, '\\')}`
 
@@ -4794,6 +4856,16 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
         >
           <IconCopy className="h-3 w-3" />
         </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onDelete?.(node)
+          }}
+          className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-danger group-hover:opacity-100"
+          title="Supprimer"
+        >
+          <IconTrash className="h-3 w-3" />
+        </button>
       </div>
     )
   }
@@ -4818,6 +4890,16 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
         >
           <IconCopy className="h-3 w-3" />
         </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
+            onDelete?.(node)
+          }}
+          className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-danger group-hover:opacity-100"
+          title="Supprimer"
+        >
+          <IconTrash className="h-3 w-3" />
+        </button>
       </div>
       {isOpen &&
         sortedTreeChildren(node).map((child) => (
@@ -4831,6 +4913,7 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
             onSelectFile={onSelectFile}
             repoPath={repoPath}
             onNotify={onNotify}
+            onDelete={onDelete}
           />
         ))}
     </div>
@@ -4841,6 +4924,38 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
 // read back from disk made a freshly saved file look modified.
 function toLf(text) {
   return text.replace(/\r\n/g, '\n')
+}
+
+// Character offset of a click inside a line cell, whatever token spans the
+// syntax highlighter wrapped around the text.
+function clickOffset(e) {
+  const cell = e.currentTarget
+  const pos = document.caretPositionFromPoint?.(e.clientX, e.clientY)
+  const range0 = pos ? null : document.caretRangeFromPoint?.(e.clientX, e.clientY)
+  const node = pos ? pos.offsetNode : range0?.startContainer
+  const offset = pos ? pos.offset : range0?.startOffset
+  if (!node || !cell.contains(node)) return null
+  const range = document.createRange()
+  range.setStart(cell, 0)
+  range.setEnd(node, offset)
+  return range.toString().length
+}
+
+// Friendly empty state for a file that can't be shown: Hubi, dimmed and
+// asleep, instead of a bare red line.
+function FileNotice({ message }) {
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+      <img
+        src="/hubi/hubi-icon.png"
+        alt=""
+        className="h-16 w-24 -rotate-6 object-contain opacity-35 grayscale"
+        draggable={false}
+      />
+      <p className="text-sm font-semibold text-text">Oups…</p>
+      <p className="max-w-sm text-xs text-muted">{message}</p>
+    </div>
+  )
 }
 
 function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasChanges, onSaved, projectFiles, onOpenFile }) {
@@ -5061,6 +5176,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
         <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">
           {file}
           {lang && <span className="ml-2 rounded border border-border px-1 py-0.5 font-sans text-[10px] uppercase text-muted">{lang}</span>}
+          <span className="ml-2 hidden font-sans text-[10.5px] text-muted/70 xl:inline">Ctrl+clic sur un import pour l'ouvrir</span>
           {dirty && <span className="ml-1.5 text-warning" title="Modifications non enregistrées">●</span>}
           {!dirty && savedAt > 0 && (
             <span className="ml-2 inline-flex items-center gap-1 font-sans text-[11px] text-success">
@@ -5227,9 +5343,9 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
           <img src={meta.dataUrl} alt={file} className="max-h-full max-w-full object-contain" />
         </div>
       ) : meta?.binary ? (
-        <p className="p-3 text-xs text-muted">Fichier binaire — aperçu indisponible ({Math.round((meta.size || 0) / 1024)} Ko).</p>
+        <FileNotice message={`Fichier binaire — aperçu indisponible (${Math.round((meta.size || 0) / 1024)} Ko).`} />
       ) : meta?.error ? (
-        <p className="p-3 text-xs text-danger">{meta.error}</p>
+        <FileNotice message={meta.error} />
       ) : (
         <div className="theme-scroll flex-1 overflow-auto font-mono text-[11px] leading-relaxed">
           <div style={{ display: 'table', minWidth: '100%' }}>
@@ -5268,6 +5384,15 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
                   </div>
                   <div
                     style={{ display: 'table-cell' }}
+                    onClick={(e) => {
+                      // Ctrl/Cmd+clic on an import or a name opens that file.
+                      if (!(e.ctrlKey || e.metaKey)) return
+                      const offset = clickOffset(e)
+                      if (offset == null) return
+                      const target = referenceTarget(row.text, offset, file, projectFiles, rows.filter((r) => r.type !== 'rem').map((r) => r.text).join('\n'))
+                      if (target) onOpenFile?.(target)
+                      else onNotify('Référence locale introuvable')
+                    }}
                     className={`select-text cursor-text whitespace-pre px-2 ${
                       row.type === 'add' ? 'text-success' : row.type === 'rem' ? 'text-danger' : 'text-text'
                     }`}
@@ -5380,6 +5505,8 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
   const [fullscreen, setFullscreen] = useState(false)
   const [quickOpen, setQuickOpen] = useState(false)
   const [fileRefreshKey, setFileRefreshKey] = useState(0)
+  const [pendingDelete, setPendingDelete] = useState(null) // { path, type, count }
+  const [deleting, setDeleting] = useState(false)
   const [treeWidth, setTreeWidth] = useState(() => {
     const saved = Number(localStorage.getItem('devhub.codeTreeWidth'))
     return saved >= TREE_MIN && saved <= TREE_MAX ? saved : 256
@@ -5467,6 +5594,32 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     })
   }
 
+  function askDelete(node) {
+    const prefix = `${node.path}/`
+    setPendingDelete({
+      path: node.path,
+      type: node.type,
+      count: node.type === 'dir' ? files.filter((f) => f.startsWith(prefix)).length : 1,
+    })
+  }
+
+  async function confirmDelete() {
+    setDeleting(true)
+    const result = await api().delete_repo_path(repo.path, pendingDelete.path)
+    setDeleting(false)
+    if (result?.error) {
+      onNotify(result.error, true)
+      return
+    }
+    const gone = pendingDelete.path
+    const inside = (f) => f === gone || f.startsWith(`${gone}/`)
+    setFiles((prev) => prev.filter((f) => !inside(f)))
+    setSelectedPath((prev) => (prev && inside(prev) ? null : prev))
+    setPendingDelete(null)
+    onNotify(`${gone} supprimé`)
+    onFileSaved?.()
+  }
+
   function openFile(path) {
     setSelectedPath(path)
     setExpanded((prev) => new Set([...prev, ...ancestorDirs(path)]))
@@ -5518,10 +5671,21 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
               onSelectFile={setSelectedPath}
               repoPath={repo.path}
               onNotify={onNotify}
+              onDelete={askDelete}
             />
           ))}
         </div>
       </div>
+      {pendingDelete && (
+        <ConfirmModal
+          title={pendingDelete.type === 'dir' ? 'Supprimer ce dossier ?' : 'Supprimer ce fichier ?'}
+          message={`${pendingDelete.path}${pendingDelete.type === 'dir' ? ` — et ses ${pendingDelete.count} fichier${pendingDelete.count > 1 ? 's' : ''}` : ''} sera supprimé définitivement du disque. Cette action est irréversible.`}
+          confirmLabel="Supprimer"
+          busy={deleting}
+          onConfirm={confirmDelete}
+          onCancel={() => setPendingDelete(null)}
+        />
+      )}
       {quickOpen && <QuickOpenModal files={files} onSelect={openFile} onClose={() => setQuickOpen(false)} />}
       {selectedPath ? (
         <FileViewer
