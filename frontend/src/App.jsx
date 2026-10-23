@@ -80,6 +80,8 @@ import {
   IconPencil,
   IconMonitor,
   IconMaximize,
+  IconSplitRight,
+  IconSplitDown,
   IconWinMinimize,
   IconWinMaximize,
   IconWinRestore,
@@ -686,33 +688,36 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-2">
-            {groups.map((g) => (
-              <div key={g.dir || '/'} className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-                <div className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted" style={{ flexBasis: '11rem' }} title={g.dir || repo.path}>
-                  <IconFolder className="h-3.5 w-3.5 shrink-0 text-accent" />
-                  <span className="truncate font-medium text-text">{folderLabel(g.dir)}</span>
-                  {g.kind && <span className="shrink-0 rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px]">{g.kind}</span>}
-                </div>
-                <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start">
+          <div className="flex shrink-0 flex-col gap-2 md:w-60">
+            <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-1.5">
+              {groups.map((g) => (
+                <div key={g.dir || '/'} className="flex flex-col gap-0.5">
+                  <div
+                    className="flex min-w-0 items-center gap-1.5 px-2 py-1 text-[11.5px] text-muted"
+                    title={g.dir || repo.path}
+                  >
+                    <IconFolder className="h-3.5 w-3.5 shrink-0 text-accent" />
+                    <span className="truncate font-medium text-text">{folderLabel(g.dir)}</span>
+                    {g.kind && <span className="shrink-0 rounded-full bg-surface-hover px-1.5 py-0.5 text-[10px]">{g.kind}</span>}
+                  </div>
                   {g.files.map((f) => (
                     <button
                       key={f.path}
                       onClick={() => openFile(f.path)}
                       title={f.path}
-                      className={`cursor-pointer rounded-md border px-2.5 py-1 font-mono text-[12px] transition-colors duration-150 ${
+                      className={`ml-3 cursor-pointer truncate rounded-md border-l-2 px-2.5 py-1 text-left font-mono text-[12px] transition-colors duration-150 ${
                         activeFile === f.path
                           ? 'border-accent bg-accent-bg text-accent'
-                          : 'border-border text-muted hover:text-text hover:border-border-strong'
+                          : 'border-transparent text-muted hover:bg-surface-hover hover:text-text'
                       }`}
                     >
                       {f.name}
                     </button>
                   ))}
                 </div>
-              </div>
-            ))}
+              ))}
+            </div>
             <div className="relative self-start">
               <Button variant="ghost" onClick={() => setNewMenuOpen((v) => !v)}>
                 <IconPlus className="h-3.5 w-3.5" />
@@ -744,14 +749,13 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
             </div>
           </div>
 
-          {active && (
-            <p className="text-[11px] text-muted">
-              Variables de <span className="font-mono text-text">{active.path}</span>
-              {active.dir !== '' && ' — lues par ce dossier uniquement'}
-            </p>
-          )}
-
-          <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-2">
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5 rounded-lg border border-border bg-surface p-2">
+            {active && (
+              <p className="px-1 pb-1 text-[11px] text-muted">
+                Variables de <span className="font-mono text-text">{active.path}</span>
+                {active.dir !== '' && ' — lues par ce dossier uniquement'}
+              </p>
+            )}
             {entries.length === 0 && <p className="px-2 py-1 text-xs text-muted">Fichier vide.</p>}
             {entries.map((entry, i) => (
               <div key={i} className="flex items-center gap-1.5">
@@ -767,7 +771,7 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
                   value={entry.value}
                   onChange={(e) => updateEntry(i, 'value', e.target.value)}
                   placeholder="valeur"
-                  className="flex-1 rounded-md border border-border bg-base px-2 py-1.5 font-mono text-[12px] text-text outline-none focus:border-accent"
+                  className="min-w-0 flex-1 rounded-md border border-border bg-base px-2 py-1.5 font-mono text-[12px] text-text outline-none focus:border-accent"
                 />
                 <button
                   onClick={() => toggleReveal(i)}
@@ -1514,35 +1518,116 @@ function PtyTerminal({
   )
 }
 
-function EmbeddedTerminal({ repo, sessionId, prompt, onNotify, onBack }) {
-  const startFn = useRef(({ rows, cols }) => api().start_terminal(repo.path, sessionId, prompt || null, rows, cols)).current
-  const [fullscreen, setFullscreen] = useState(false)
+// Split layout for AI sessions: a binary tree of panes. Panes are rendered
+// flat (absolutely positioned from the computed rects) rather than nested, so
+// splitting never remounts — and therefore never kills — a running terminal.
+let aiPaneSeq = 0
+const newAiLeaf = (extra) => ({ type: 'leaf', id: `p${++aiPaneSeq}`, session: undefined, ...extra })
+
+function splitAiLeaf(node, id, dir, fresh) {
+  if (node.type === 'leaf') {
+    return node.id === id ? { type: 'split', id: `s${++aiPaneSeq}`, dir, ratio: 0.5, a: node, b: fresh } : node
+  }
+  return { ...node, a: splitAiLeaf(node.a, id, dir, fresh), b: splitAiLeaf(node.b, id, dir, fresh) }
+}
+
+function removeAiLeaf(node, id) {
+  if (node.type === 'leaf') return node.id === id ? null : node
+  const a = removeAiLeaf(node.a, id)
+  const b = removeAiLeaf(node.b, id)
+  if (!a) return b
+  if (!b) return a
+  return { ...node, a, b }
+}
+
+function mapAiLeaf(node, id, fn) {
+  if (node.type === 'leaf') return node.id === id ? fn(node) : node
+  return { ...node, a: mapAiLeaf(node.a, id, fn), b: mapAiLeaf(node.b, id, fn) }
+}
+
+function setAiRatio(node, id, ratio) {
+  if (node.type === 'leaf') return node
+  if (node.id === id) return { ...node, ratio }
+  return { ...node, a: setAiRatio(node.a, id, ratio), b: setAiRatio(node.b, id, ratio) }
+}
+
+function layoutAiTree(node, rect, leaves, splits) {
+  if (node.type === 'leaf') {
+    leaves.push({ leaf: node, rect })
+    return
+  }
+  const { x, y, w, h } = rect
+  if (node.dir === 'row') {
+    const wa = w * node.ratio
+    layoutAiTree(node.a, { x, y, w: wa, h }, leaves, splits)
+    layoutAiTree(node.b, { x: x + wa, y, w: w - wa, h }, leaves, splits)
+  } else {
+    const ha = h * node.ratio
+    layoutAiTree(node.a, { x, y, w, h: ha }, leaves, splits)
+    layoutAiTree(node.b, { x, y: y + ha, w, h: h - ha }, leaves, splits)
+  }
+  splits.push({ split: node, rect })
+}
+
+function firstAiPicker(node) {
+  if (node.type === 'leaf') return node.session === undefined ? node : null
+  return firstAiPicker(node.a) || firstAiPicker(node.b)
+}
+
+function AiPaneTerminal({ repo, session, prompt, onNotify }) {
+  const startFn = useRef(({ rows, cols }) => api().start_terminal(repo.path, session, prompt || null, rows, cols)).current
+  return <PtyTerminal startFn={startFn} onNotify={onNotify} closeOnUnmount colorize={false} />
+}
+
+function AiSessionPicker({ aiSettings, sessions, openIds, onPick }) {
+  const [search, setSearch] = useState('')
+  const filtered = sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
 
   return (
-    <div
-      className={
-        fullscreen
-          ? 'fullscreen-below-tabs z-50 flex flex-col overflow-hidden bg-base'
-          : 'flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border border-border'
-      }
-    >
-      <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-2">
-        <Button variant="subtle" onClick={onBack} className="px-2">
-          <IconChevronLeft className="h-4 w-4" />
-          Retour
+    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-muted">
+          CLI actif : <span className="font-medium text-text">{IDE_LABELS[aiSettings.provider] || aiSettings.provider}</span>
+        </span>
+        <Button variant="primary" onClick={() => onPick(null)}>
+          <IconTerminal className="h-3.5 w-3.5" />
+          Nouvelle session
         </Button>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-muted">{repo.name}</span>
-          <button
-            onClick={() => setFullscreen((v) => !v)}
-            className="text-muted hover:text-text cursor-pointer"
-            title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
-          >
-            <IconMaximize className="h-3.5 w-3.5" />
-          </button>
-        </div>
       </div>
-      <PtyTerminal startFn={startFn} onNotify={onNotify} closeOnUnmount colorize={false} />
+
+      {aiSettings.provider !== 'claude-code' ? (
+        <p className="text-xs text-muted">
+          Liste des sessions non disponible pour ce CLI — clique sur "Nouvelle session" pour l'ouvrir ici.
+        </p>
+      ) : sessions.length === 0 ? (
+        <EmptyState message="Aucune session Claude Code trouvée pour ce repo." size="sm" />
+      ) : (
+        <>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Rechercher une session…"
+            className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
+          />
+          {filtered.length === 0 ? (
+            <EmptyState message={`Aucune session ne correspond à "${search}".`} size="sm" />
+          ) : (
+            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-1.5">
+              {filtered.map((s) => (
+                <div key={s.id} className="flex items-center justify-between gap-3 rounded-md px-3 py-2 hover:bg-surface-hover">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs text-text">{s.title}</p>
+                    <p className="font-mono text-[10px] text-muted">{new Date(s.modified * 1000).toLocaleString()}</p>
+                  </div>
+                  <Button variant="ghost" disabled={openIds.has(s.id)} onClick={() => onPick(s.id)}>
+                    {openIds.has(s.id) ? 'Ouverte' : 'Reprendre'}
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </div>
   )
 }
@@ -1555,15 +1640,20 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
   const [aiSettings, setAiSettings] = useState(null)
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(true)
-  const [activeSession, setActiveSession] = useState(undefined)
-  const [search, setSearch] = useState('')
-  const [launch, setLaunch] = useState(null) // { prompt, key }
+  const [tree, setTree] = useState(() => newAiLeaf())
+  const [fullscreen, setFullscreen] = useState(false)
+  const areaRef = useRef(null)
 
   useEffect(() => {
     if (!taskLaunch || taskLaunch.path !== repo.path || consumedTaskLaunches.has(taskLaunch.nonce)) return
     consumedTaskLaunches.add(taskLaunch.nonce)
-    setLaunch({ prompt: taskLaunch.prompt, key: taskLaunch.nonce })
-    setActiveSession(taskLaunch.sessionId ?? null)
+    const session = taskLaunch.sessionId ?? null
+    const prompt = taskLaunch.prompt
+    setTree((prev) => {
+      const picker = firstAiPicker(prev)
+      if (picker) return mapAiLeaf(prev, picker.id, (l) => ({ ...l, session, prompt }))
+      return { type: 'split', id: `s${++aiPaneSeq}`, dir: 'row', ratio: 0.5, a: prev, b: newAiLeaf({ session, prompt }) }
+    })
   }, [taskLaunch, repo.path])
 
   const load = useCallback(async () => {
@@ -1583,27 +1673,40 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
     load()
   }, [load])
 
-  if (activeSession !== undefined) {
-    return (
-      <EmbeddedTerminal
-        key={launch?.key ?? `session-${activeSession}`}
-        repo={repo}
-        sessionId={activeSession}
-        prompt={launch?.prompt}
-        onNotify={onNotify}
-        onBack={() => {
-          setActiveSession(undefined)
-          setLaunch(null)
-        }}
-      />
-    )
+  const layout = useMemo(() => {
+    const leaves = []
+    const splits = []
+    layoutAiTree(tree, { x: 0, y: 0, w: 1, h: 1 }, leaves, splits)
+    return { leaves, splits }
+  }, [tree])
+
+  const openIds = useMemo(() => new Set(layout.leaves.map((l) => l.leaf.session).filter(Boolean)), [layout])
+
+  function closePane(id) {
+    setTree((prev) => removeAiLeaf(prev, id) || newAiLeaf())
+  }
+
+  function startDrag(e, split, rect) {
+    e.preventDefault()
+    const box = areaRef.current.getBoundingClientRect()
+    const total = (split.dir === 'row' ? box.width * rect.w : box.height * rect.h) || 1
+    const origin = split.dir === 'row' ? e.clientX : e.clientY
+    const startRatio = split.ratio
+    function move(ev) {
+      const delta = ((split.dir === 'row' ? ev.clientX : ev.clientY) - origin) / total
+      setTree((prev) => setAiRatio(prev, split.id, Math.min(0.9, Math.max(0.1, startRatio + delta))))
+    }
+    function up() {
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
   }
 
   if (loading) return <p className="text-xs text-muted">Chargement…</p>
 
-  const isCli = CLI_PROVIDER_IDS.includes(aiSettings?.provider)
-
-  if (!isCli) {
+  if (!CLI_PROVIDER_IDS.includes(aiSettings?.provider)) {
     return (
       <p className="text-xs text-muted">
         Configure un CLI (Claude Code, Codex, ou autre) dans Paramètres IA pour utiliser cette section.
@@ -1611,58 +1714,98 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
     )
   }
 
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-muted">
-          CLI actif : <span className="font-medium text-text">{IDE_LABELS[aiSettings.provider] || aiSettings.provider}</span>
-        </span>
-        <Button variant="primary" onClick={() => setActiveSession(null)}>
-          <IconTerminal className="h-3.5 w-3.5" />
-          Nouvelle session
-        </Button>
-      </div>
+  const pct = (v) => `${v * 100}%`
+  const multi = layout.leaves.length > 1
 
-      {aiSettings.provider !== 'claude-code' ? (
-        <p className="text-xs text-muted">
-          Liste des sessions non disponible pour ce CLI — clique sur "Nouvelle session" pour l'ouvrir ici.
-        </p>
-      ) : sessions.length === 0 ? (
-        <EmptyState message={`Aucune session ${aiSettings?.provider === 'codex' ? 'Codex' : 'Claude Code'} trouvée pour ce repo.`} size="sm" />
-      ) : (
-        <>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Rechercher une session…"
-            className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
-          />
-          {(() => {
-            const filtered = sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
-            if (filtered.length === 0) {
-              return <EmptyState message={`Aucune session ne correspond à "${search}".`} size="sm" />
-            }
-            return (
-              <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-1.5">
-                {filtered.map((s) => (
-                  <div
-                    key={s.id}
-                    className="flex items-center justify-between gap-3 rounded-md px-3 py-2 hover:bg-surface-hover"
+  return (
+    <div
+      className={
+        fullscreen
+          ? 'fullscreen-below-tabs z-50 flex flex-col overflow-hidden bg-base'
+          : 'flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border border-border'
+      }
+    >
+      <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5">
+        <span className="text-xs text-muted">
+          {repo.name} · {layout.leaves.length} panneau{multi ? 'x' : ''}
+        </span>
+        <button
+          onClick={() => setFullscreen((v) => !v)}
+          className="cursor-pointer text-muted hover:text-text"
+          title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
+        >
+          <IconMaximize className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div ref={areaRef} className="relative min-h-0 flex-1">
+        {layout.leaves.map(({ leaf, rect }) => {
+          const title =
+            leaf.session === undefined
+              ? 'Choisir une session'
+              : leaf.session === null
+                ? 'Nouvelle session'
+                : sessions.find((s) => s.id === leaf.session)?.title || 'Session'
+          return (
+            <div
+              key={leaf.id}
+              className="absolute flex min-h-0 min-w-0 flex-col overflow-hidden border border-border bg-base"
+              style={{ left: pct(rect.x), top: pct(rect.y), width: pct(rect.w), height: pct(rect.h) }}
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-border bg-surface px-2 py-1">
+                <span className="min-w-0 truncate text-[11px] text-muted" title={title}>
+                  {title}
+                </span>
+                <div className="flex shrink-0 items-center gap-1.5 text-muted">
+                  <button
+                    onClick={() => setTree((prev) => splitAiLeaf(prev, leaf.id, 'row', newAiLeaf()))}
+                    className="cursor-pointer hover:text-text"
+                    title="Diviser à droite"
                   >
-                    <div className="min-w-0">
-                      <p className="truncate text-xs text-text">{s.title}</p>
-                      <p className="font-mono text-[10px] text-muted">{new Date(s.modified * 1000).toLocaleString()}</p>
-                    </div>
-                    <Button variant="ghost" onClick={() => setActiveSession(s.id)}>
-                      Reprendre
-                    </Button>
-                  </div>
-                ))}
+                    <IconSplitRight className="h-3.5 w-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setTree((prev) => splitAiLeaf(prev, leaf.id, 'col', newAiLeaf()))}
+                    className="cursor-pointer hover:text-text"
+                    title="Diviser en bas"
+                  >
+                    <IconSplitDown className="h-3.5 w-3.5" />
+                  </button>
+                  {(multi || leaf.session !== undefined) && (
+                    <button onClick={() => closePane(leaf.id)} className="cursor-pointer hover:text-danger" title="Fermer le panneau">
+                      <IconClose className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </div>
               </div>
-            )
-          })()}
-        </>
-      )}
+              {leaf.session === undefined ? (
+                <AiSessionPicker
+                  aiSettings={aiSettings}
+                  sessions={sessions}
+                  openIds={openIds}
+                  onPick={(session) => setTree((prev) => mapAiLeaf(prev, leaf.id, (l) => ({ ...l, session })))}
+                />
+              ) : (
+                <AiPaneTerminal repo={repo} session={leaf.session} prompt={leaf.prompt} onNotify={onNotify} />
+              )}
+            </div>
+          )
+        })}
+        {layout.splits.map(({ split, rect }) => {
+          const row = split.dir === 'row'
+          return (
+            <div
+              key={split.id}
+              onMouseDown={(e) => startDrag(e, split, rect)}
+              className={`absolute z-10 hover:bg-accent/40 ${row ? 'cursor-col-resize' : 'cursor-row-resize'}`}
+              style={
+                row
+                  ? { left: `calc(${pct(rect.x + rect.w * split.ratio)} - 3px)`, top: pct(rect.y), width: 6, height: pct(rect.h) }
+                  : { top: `calc(${pct(rect.y + rect.h * split.ratio)} - 3px)`, left: pct(rect.x), height: 6, width: pct(rect.w) }
+              }
+            />
+          )
+        })}
+      </div>
     </div>
   )
 }

@@ -381,3 +381,21 @@ export function IconPalette({ className }) {
     </svg>
   )
 }
+
+export function IconSplitRight({ className }) {
+  return (
+    <svg {...base} className={className}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M12 4v16" />
+    </svg>
+  )
+}
+
+export function IconSplitDown({ className }) {
+  return (
+    <svg {...base} className={className}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 12h18" />
+    </svg>
+  )
+}
