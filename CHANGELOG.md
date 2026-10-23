@@ -6,6 +6,15 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.8.0] - 2026-10-23
+
+### ✨ Nouveautés
+- **Sessions IA en panneaux** : l'onglet IA se divise comme on veut (à droite ou en bas, autant de fois qu'on veut) pour faire tourner plusieurs sessions côte à côte. Chaque panneau reprend une ancienne session ou en démarre une nouvelle, les séparateurs se déplacent à la souris
+- **Onglet Env refait** : les fichiers `.env` sont rangés par dossier dans un cadre, les variables s'affichent dans un tableau Clé / Valeur, et un bandeau récapitule les modifications en attente (ajoutée, modifiée, supprimée) avant de les appliquer
+- **Onglet Code : suppression** de fichiers et de dossiers depuis l'arborescence, avec une confirmation
+- **Onglet Code : Ctrl+clic** sur un import ou sur un nom importé ouvre le fichier correspondant (chemins relatifs, alias `@/`, projets dans un sous-dossier)
+- Un fichier qui ne peut pas être affiché (trop volumineux, binaire) montre maintenant un message avec Hubi au lieu d'une ligne rouge
+
 ## [0.7.0] - 2026-10-22
 
 ### ✨ Nouveautés
