@@ -6,6 +6,13 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+## [0.9.0] - 2026-10-28
+
+### ✨ Nouveautés
+- **Onglet Code : renommer** un fichier ou un dossier depuis l'arborescence (crayon au survol, ou F2 sur le fichier sélectionné). Le fichier ouvert et le statut git suivent le nouveau nom ; Dev Hub refuse un nom déjà pris, un nom invalide ou un renommage pendant une modification non enregistrée
+- **Onglet Env : copier une variable** — la valeur, la ligne `KEY=valeur` ou le nom, avec une coche de confirmation plutôt qu'une notification
+- **Onglet Env : exporter** — copier toutes les variables ou le modèle `.env.example` (clés sans valeurs), créer `.env.example` à côté du fichier (commentaires conservés, confirmation avant de remplacer), ou enregistrer le fichier où l'on veut, avec ou sans les valeurs
+
 ## [0.8.0] - 2026-10-23
 
 ### ✨ Nouveautés
