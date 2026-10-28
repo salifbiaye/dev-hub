@@ -9,7 +9,7 @@ from core.platform import platform_svc
 APP_DATA_DIR = platform_svc.config_dir()
 CONFIG_PATH = APP_DATA_DIR / "config.json"
 
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.9.0"
 GITHUB_REPO = "salifbiaye/dev-hub"
 
 # JetBrains Toolbox keeps a stale "idea" script pointing at an uninstalled version on this
