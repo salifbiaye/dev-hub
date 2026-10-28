@@ -4,6 +4,8 @@ import os
 import shutil
 from pathlib import Path
 
+import webview
+
 from app_config import load_config
 from features.git.run_git import run_git, safe_repo_file
 
@@ -156,6 +158,41 @@ class ReposFilesMixin:
             return {"error": str(e)}
         return {"ok": True}
 
+    _BAD_NAME_CHARS = set('<>:"/\\|?*')
+
+    def rename_repo_path(self, path, rel, new_name):
+        """Rename a file or folder of a repo Dev Hub knows about (Code tab).
+        Only the last part of the path changes: it never moves anything, and
+        never touches the repo root or .git."""
+        known = {str(Path(r["path"]).resolve()) for r in load_config()["repos"]}
+        if str(Path(path).resolve()) not in known or not safe_repo_file(path, rel):
+            return {"error": "Chemin invalide"}
+        if ".git" in Path(rel).parts:
+            return {"error": "Le dossier .git ne peut pas être renommé ici"}
+        name = (new_name or "").strip()
+        if (
+            not name
+            or name in (".", "..")
+            or name.endswith(".")
+            or any(c in self._BAD_NAME_CHARS or ord(c) < 32 for c in name)
+        ):
+            return {"error": "Nom invalide (pas de / \\ : * ? \" < > |, ni de point final)"}
+        src = Path(path) / rel
+        if not (src.exists() or src.is_symlink()):
+            return {"error": "Introuvable"}
+        dst = src.with_name(name)
+        new_rel = (Path(rel).parent / name).as_posix()
+        if str(dst) == str(src):  # exact text: on Windows Path == ignores the case
+            return {"ok": True, "path": new_rel}
+        # A case-only change (readme -> README) is the same file on Windows.
+        if dst.exists() and os.path.normcase(str(dst)) != os.path.normcase(str(src)):
+            return {"error": f"« {name} » existe déjà dans ce dossier"}
+        try:
+            src.rename(dst)
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True, "path": new_rel}
+
     # Folders never worth looking into for .env files: dependency caches and
     # build output (a .env copied into dist/ or target/ is not "the" .env).
     ENV_SKIP_DIRS = CODE_BROWSER_SKIP_DIRS | {
@@ -236,6 +273,61 @@ class ReposFilesMixin:
         if base not in target.parents:
             return None
         return target
+
+    @staticmethod
+    def _env_example_text(text):
+        """The same file with every value emptied (comments and blank lines
+        kept): what gets committed as .env.example."""
+        out = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", ";")) or "=" not in stripped:
+                out.append(line)
+            else:
+                out.append(f"{stripped.split('=', 1)[0].strip()}=")
+        return "\n".join(out) + "\n"
+
+    def write_env_example(self, path, filename, overwrite=False):
+        """Create .env.example next to a .env file, values emptied."""
+        src = self._env_file_path(path, filename)
+        if not src:
+            return {"error": "Nom de fichier invalide"}
+        if not src.is_file():
+            return {"error": "Fichier introuvable"}
+        dst = src.with_name(".env.example")
+        if dst == src:
+            return {"error": "C'est déjà le fichier d'exemple"}
+        rel = dst.relative_to(Path(path).resolve()).as_posix()
+        if dst.exists() and not overwrite:
+            return {"exists": True, "path": rel}
+        try:
+            dst.write_text(self._env_example_text(src.read_text(encoding="utf-8", errors="replace")), encoding="utf-8")
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True, "path": rel}
+
+    def export_env_file(self, path, filename, example=False):
+        """Save a copy of a .env file wherever the user picks (native dialog),
+        with its values or as an example (values emptied)."""
+        src = self._env_file_path(path, filename)
+        if not src:
+            return {"error": "Nom de fichier invalide"}
+        if not src.is_file():
+            return {"error": "Fichier introuvable"}
+        text = src.read_text(encoding="utf-8", errors="replace")
+        if example:
+            text = self._env_example_text(text)
+        dest = webview.windows[0].create_file_dialog(
+            webview.FileDialog.SAVE, save_filename=".env.example" if example else src.name
+        )
+        if not dest:
+            return {"cancelled": True}
+        dest = dest[0] if isinstance(dest, (list, tuple)) else dest
+        try:
+            Path(dest).write_text(text, encoding="utf-8")
+        except OSError as e:
+            return {"error": str(e)}
+        return {"ok": True, "path": str(dest)}
 
     def read_env_file(self, path, filename):
         file_path = self._env_file_path(path, filename)

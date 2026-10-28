@@ -544,10 +544,117 @@ function GroupMemberRow({ repo, selected, onToggleSelect, isRunning, runningCoun
 // "" is the project root; any other value is the folder relative to it.
 const folderLabel = (dir) => (dir === '' ? 'Racine du projet' : dir)
 
+// KEY=value lines of the variables (values emptied for an .env.example).
+const envLines = (list, withValues) =>
+  list
+    .filter((e) => e.key.trim())
+    .map((e) => `${e.key.trim()}=${withValues ? e.value : ''}`)
+    .join('\n') + '\n'
+
+// Copy button of one variable: value, KEY=value line or just the name. The
+// button turns into a check for a moment instead of raising a toast.
+function EnvCopyButton({ entry, onNotify }) {
+  const [open, setOpen] = useState(false)
+  const [done, setDone] = useState(false)
+
+  async function copy(text) {
+    setOpen(false)
+    const result = await copyText(text)
+    if (!result.ok) {
+      onNotify(`Échec de la copie : ${result.reason}`, true)
+      return
+    }
+    setDone(true)
+    setTimeout(() => setDone(false), 1200)
+  }
+
+  const items = [
+    { label: 'Copier la valeur', text: entry.value },
+    { label: 'Copier KEY=valeur', text: `${entry.key}=${entry.value}` },
+    { label: 'Copier le nom', text: entry.key },
+  ]
+  return (
+    <div className="relative" onMouseLeave={() => setOpen(false)}>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        disabled={!entry.key.trim()}
+        className="cursor-pointer hover:text-text disabled:cursor-not-allowed disabled:opacity-30"
+        title="Copier"
+      >
+        {done ? <IconCheck className="h-3.5 w-3.5 text-success" /> : <IconCopy className="h-3.5 w-3.5" />}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 w-44 rounded-md border border-border-strong bg-surface p-1 shadow-lg">
+          {items.map((it) => (
+            <button
+              key={it.label}
+              onClick={() => copy(it.text)}
+              className="flex w-full cursor-pointer items-center rounded px-2 py-1.5 text-left text-[11.5px] text-text hover:bg-surface-hover"
+            >
+              {it.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Rename a file or folder of the Code tab; the base name (before the
+// extension) is pre-selected, like in an explorer.
+function RenameModal({ node, busy, error, onSubmit, onCancel }) {
+  const [name, setName] = useState(node.name)
+  const inputRef = useRef(null)
+  useEffect(() => {
+    const el = inputRef.current
+    if (!el) return
+    el.focus()
+    const dot = node.type === 'file' ? node.name.lastIndexOf('.') : -1
+    el.setSelectionRange(0, dot > 0 ? dot : node.name.length)
+  }, [node])
+  const unchanged = name.trim() === node.name
+  return (
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60 p-6" onClick={busy ? undefined : onCancel}>
+      <form
+        className="w-full max-w-sm rounded-xl border border-border-strong bg-surface p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!unchanged && name.trim()) onSubmit(name.trim())
+        }}
+      >
+        <h3 className="mb-1 text-sm font-semibold text-text">Renommer {node.type === 'dir' ? 'le dossier' : 'le fichier'}</h3>
+        <p className="mb-3 truncate font-mono text-[11px] text-muted" title={node.path}>
+          {node.path}
+        </p>
+        <input
+          ref={inputRef}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Escape' && !busy && onCancel()}
+          spellCheck={false}
+          className="w-full rounded-md border border-border bg-base px-2.5 py-1.5 font-mono text-[12px] text-text outline-none focus:border-accent"
+        />
+        {error && <p className="mt-2 text-[11.5px] text-danger">{error}</p>}
+        <div className="mt-4 flex justify-end gap-2">
+          <Button variant="ghost" type="button" disabled={busy} onClick={onCancel}>
+            Annuler
+          </Button>
+          <Button variant="primary" type="submit" disabled={busy || unchanged || !name.trim()}>
+            {busy ? 'Renommage…' : 'Renommer'}
+          </Button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 function EnvPanel({ repo, onNotify, refreshSignal }) {
   const [files, setFiles] = useState([]) // [{ path, dir, name }]
   const [folders, setFolders] = useState([]) // [{ dir, kind, has_env }]
   const [newMenuOpen, setNewMenuOpen] = useState(false)
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
+  const [overwriteExample, setOverwriteExample] = useState(null) // path of an existing .env.example to replace
   const [pendingFile, setPendingFile] = useState(null) // file to open once unsaved edits are dropped
   const [activeFile, setActiveFile] = useState(null)
   const [entries, setEntries] = useState([])
@@ -631,6 +738,36 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
       onNotify(`${activeFile} enregistré`)
       loadEntries()
     }
+  }
+
+  async function copyAll(withValues) {
+    setExportMenuOpen(false)
+    const result = await copyText(envLines(entries, withValues))
+    onNotify(
+      result.ok ? (withValues ? 'Variables copiées' : 'Modèle .env.example copié') : `Échec de la copie : ${result.reason}`,
+      !result.ok,
+    )
+  }
+
+  // .env.example next to the active file (values emptied).
+  async function createExample(overwrite = false) {
+    setExportMenuOpen(false)
+    const result = await api().write_env_example(repo.path, activeFile, overwrite)
+    if (result?.error) onNotify(result.error, true)
+    else if (result?.exists) setOverwriteExample(result.path)
+    else if (result?.ok) {
+      setOverwriteExample(null)
+      onNotify(`${result.path} créé`)
+      loadFiles()
+    }
+  }
+
+  // Native "save as" dialog, with the values or as an example.
+  async function exportAs(example) {
+    setExportMenuOpen(false)
+    const result = await api().export_env_file(repo.path, activeFile, example)
+    if (result?.error) onNotify(result.error, true)
+    else if (result?.ok) onNotify(`Exporté vers ${result.path}`)
   }
 
   // Opening another file while this one has unsaved edits asks first.
@@ -774,6 +911,44 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
                 Paires clé / valeur lues par {active && active.dir !== '' ? 'ce dossier uniquement' : 'le projet'}.
               </p>
             </div>
+            <div className="flex items-center gap-2">
+            <div className="relative">
+              <Button variant="ghost" disabled={!active} onClick={() => setExportMenuOpen((v) => !v)}>
+                <IconExternal className="h-3.5 w-3.5" />
+                Exporter
+                <IconChevronDown className="h-3 w-3" />
+              </Button>
+              {exportMenuOpen && (
+                <div
+                  className="absolute right-0 top-full z-20 mt-1 w-72 rounded-md border border-border-strong bg-surface p-1 shadow-lg"
+                  onMouseLeave={() => setExportMenuOpen(false)}
+                >
+                  {[
+                    { label: 'Copier toutes les variables', hint: 'KEY=valeur, une par ligne', run: () => copyAll(true), file: false },
+                    { label: 'Copier le modèle (.env.example)', hint: 'les clés seulement, sans les valeurs', run: () => copyAll(false), file: false },
+                    null,
+                    { label: 'Créer .env.example à côté', hint: 'dans le même dossier, valeurs vidées', run: () => createExample(), file: true },
+                    { label: 'Enregistrer sous… (avec les valeurs)', hint: 'choisir où ranger le fichier', run: () => exportAs(false), file: true },
+                    { label: 'Enregistrer sous… (modèle sans valeurs)', hint: 'choisir où ranger le fichier', run: () => exportAs(true), file: true },
+                  ].map((it, i) =>
+                    it === null ? (
+                      <div key={i} className="my-1 border-t border-border" />
+                    ) : (
+                      <button
+                        key={it.label}
+                        onClick={it.run}
+                        disabled={it.file && dirty}
+                        title={it.file && dirty ? "Applique d'abord tes modifications" : undefined}
+                        className="flex w-full cursor-pointer flex-col items-start rounded px-2 py-1.5 text-left hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <span className="text-[11.5px] text-text">{it.label}</span>
+                        <span className="text-[10px] text-muted">{it.hint}</span>
+                      </button>
+                    ),
+                  )}
+                </div>
+              )}
+            </div>
             <div className="relative">
               <Button variant="ghost" onClick={() => setNewMenuOpen((v) => !v)}>
                 <IconPlus className="h-3.5 w-3.5" />
@@ -803,13 +978,14 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
                 </div>
               )}
             </div>
+            </div>
           </div>
 
           <div className="overflow-hidden rounded-lg border border-border bg-surface">
             <div className="flex items-center gap-3 border-b border-border bg-surface-hover px-3 py-2 text-[11px] font-semibold uppercase tracking-wider text-muted">
               <span className="w-64 shrink-0 pl-6">Clé</span>
               <span className="flex-1">Valeur</span>
-              <span className="w-14 shrink-0" />
+              <span className="w-20 shrink-0" />
             </div>
             <div className="divide-y divide-border">
               {entries.length === 0 && <p className="px-3 py-3 text-xs text-muted">Fichier vide.</p>}
@@ -830,7 +1006,8 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
                     placeholder="valeur"
                     className="min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-2 py-1.5 font-mono text-[12px] text-text outline-none hover:border-border focus:border-accent focus:bg-base"
                   />
-                  <div className="flex w-14 shrink-0 items-center justify-end gap-2 text-muted">
+                  <div className="flex w-20 shrink-0 items-center justify-end gap-2 text-muted">
+                    <EnvCopyButton entry={entry} onNotify={onNotify} />
                     <button
                       onClick={() => toggleReveal(i)}
                       className="cursor-pointer hover:text-text"
@@ -853,6 +1030,15 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
             </div>
           </div>
         </div>
+      )}
+      {overwriteExample && (
+        <ConfirmModal
+          title="Remplacer le fichier d'exemple ?"
+          message={`${overwriteExample} existe déjà. Il sera remplacé par un modèle généré depuis ${activeFile}.`}
+          confirmLabel="Remplacer"
+          onConfirm={() => createExample(true)}
+          onCancel={() => setOverwriteExample(null)}
+        />
       )}
       {pendingFile && (
         <ConfirmModal
@@ -4817,7 +5003,7 @@ function sortedTreeChildren(node) {
   })
 }
 
-function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSelectFile, repoPath, onNotify, onDelete }) {
+function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSelectFile, repoPath, onNotify, onDelete, onRename }) {
   const indent = { paddingLeft: `${depth * 14 + 6}px` }
   const absolutePath = `${repoPath}\\${node.path.replace(/\//g, '\\')}`
 
@@ -4859,6 +5045,16 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
         <button
           onClick={(e) => {
             e.stopPropagation()
+            onRename?.(node)
+          }}
+          className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-text group-hover:opacity-100"
+          title="Renommer (F2)"
+        >
+          <IconPencil className="h-3 w-3" />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
             onDelete?.(node)
           }}
           className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-danger group-hover:opacity-100"
@@ -4893,6 +5089,16 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
         <button
           onClick={(e) => {
             e.stopPropagation()
+            onRename?.(node)
+          }}
+          className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-text group-hover:opacity-100"
+          title="Renommer"
+        >
+          <IconPencil className="h-3 w-3" />
+        </button>
+        <button
+          onClick={(e) => {
+            e.stopPropagation()
             onDelete?.(node)
           }}
           className="shrink-0 cursor-pointer text-muted opacity-0 hover:text-danger group-hover:opacity-100"
@@ -4914,6 +5120,7 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
             repoPath={repoPath}
             onNotify={onNotify}
             onDelete={onDelete}
+            onRename={onRename}
           />
         ))}
     </div>
@@ -5507,6 +5714,9 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
   const [fileRefreshKey, setFileRefreshKey] = useState(0)
   const [pendingDelete, setPendingDelete] = useState(null) // { path, type, count }
   const [deleting, setDeleting] = useState(false)
+  const [pendingRename, setPendingRename] = useState(null) // tree node being renamed
+  const [renaming, setRenaming] = useState(false)
+  const [renameError, setRenameError] = useState('')
   const [treeWidth, setTreeWidth] = useState(() => {
     const saved = Number(localStorage.getItem('devhub.codeTreeWidth'))
     return saved >= TREE_MIN && saved <= TREE_MAX ? saved : 256
@@ -5620,6 +5830,54 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     onFileSaved?.()
   }
 
+  function askRename(node) {
+    setRenameError('')
+    setPendingRename(node)
+  }
+
+  async function confirmRename(newName) {
+    const old = pendingRename.path
+    // Edits typed in the editor are keyed by the file's path: renaming under
+    // them would orphan the draft, so they must be saved or dropped first.
+    const prefix = `${repo.path}::`
+    const unsaved = draftStore.keys().some((k) => {
+      if (!k.startsWith(prefix)) return false
+      const rel = k.slice(prefix.length)
+      return rel === old || rel.startsWith(`${old}/`)
+    })
+    if (unsaved) {
+      setRenameError("Enregistre ou abandonne d'abord les modifications en cours dans ce fichier.")
+      return
+    }
+    setRenaming(true)
+    const result = await api().rename_repo_path(repo.path, old, newName)
+    setRenaming(false)
+    if (result?.error) {
+      setRenameError(result.error)
+      return
+    }
+    const moved = (f) => (f === old ? result.path : f.startsWith(`${old}/`) ? result.path + f.slice(old.length) : f)
+    setFiles((prev) => prev.map(moved))
+    setSelectedPath((prev) => (prev ? moved(prev) : prev))
+    setExpanded((prev) => new Set([...prev].map(moved)))
+    setPendingRename(null)
+    onFileSaved?.()
+  }
+
+  // F2 renames the selected file, like in an explorer (not while typing).
+  useEffect(() => {
+    function onKey(e) {
+      if (e.key !== 'F2' || !selectedPath) return
+      const tag = document.activeElement?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return
+      e.preventDefault()
+      askRename({ path: selectedPath, name: selectedPath.split('/').pop(), type: 'file' })
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPath])
+
   function openFile(path) {
     setSelectedPath(path)
     setExpanded((prev) => new Set([...prev, ...ancestorDirs(path)]))
@@ -5672,10 +5930,21 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
               repoPath={repo.path}
               onNotify={onNotify}
               onDelete={askDelete}
+              onRename={askRename}
             />
           ))}
         </div>
       </div>
+      {pendingRename && (
+        <RenameModal
+          key={pendingRename.path}
+          node={pendingRename}
+          busy={renaming}
+          error={renameError}
+          onSubmit={confirmRename}
+          onCancel={() => setPendingRename(null)}
+        />
+      )}
       {pendingDelete && (
         <ConfirmModal
           title={pendingDelete.type === 'dir' ? 'Supprimer ce dossier ?' : 'Supprimer ce fichier ?'}

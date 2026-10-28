@@ -35,6 +35,7 @@ export const draftStore = {
     drafts.delete(key)
     markDirty()
   },
+  keys: () => [...drafts.keys()],
 }
 
 /**
