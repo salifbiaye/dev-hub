@@ -6,7 +6,9 @@ from pathlib import Path
 
 def run_git(path, *args):
     result = subprocess.run(
-        ["git", "-C", path, *args],
+        # core.quotePath=false: file names with accents come out as they are,
+        # not as "\303\251" escapes (ls-files, diff --name-only, ...).
+        ["git", "-C", path, "-c", "core.quotePath=false", *args],
         capture_output=True,
         text=True,
         # Without an explicit encoding, Python decodes with the Windows

@@ -5,7 +5,11 @@ from .run_git import run_git, safe_repo_file
 
 class GitStatusMixin:
     def git_status(self, path):
-        out, err, code = run_git(path, "status", "--porcelain=v2", "--branch")
+        # -z: NUL-separated and never quoted. Without it git writes names with
+        # accents or spaces as "Guide illustr\303\251 ..." (quotes and octal
+        # escapes included), which then matched nothing in `git add`, failing
+        # the whole add and every action built on it (AI commit message, commit).
+        out, err, code = run_git(path, "status", "--porcelain=v2", "--branch", "-z")
         if code != 0:
             return {"error": err or "git status a échoué"}
 
@@ -17,7 +21,13 @@ class GitStatusMixin:
         conflicted = []
         files = []
 
-        for line in out.splitlines():
+        entries = out.split("\0")
+        i = 0
+        while i < len(entries):
+            line = entries[i]
+            i += 1
+            if not line:
+                continue
             if line.startswith("# branch.head"):
                 branch = line.split(" ")[-1]
             elif line.startswith("# branch.ab"):
@@ -39,7 +49,8 @@ class GitStatusMixin:
             elif line.startswith("2 "):
                 dirty += 1
                 parts = line.split(" ", 9)
-                files.append({"path": parts[9].split("\t")[0], "status": parts[1]})
+                files.append({"path": parts[9], "status": parts[1]})
+                i += 1  # with -z the rename's original path is the next entry
 
         return {
             "branch": branch,
