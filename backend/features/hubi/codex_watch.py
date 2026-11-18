@@ -31,10 +31,10 @@ def notify_flag():
 
 
 def enabled():
-    """Only while Codex is the agent chosen in Paramètres IA."""
-    from features.terminal.sessions import cli_kind
-
-    return ROOT.exists() and notify_flag() and cli_kind() == "codex"
+    """Whenever Codex is installed and the switch is on — not only when it is the
+    default agent: Claude and Codex are both used side by side, and a Codex
+    session started from its own app must make Hubi react too."""
+    return ROOT.exists() and notify_flag()
 
 
 def _first_meta(path):

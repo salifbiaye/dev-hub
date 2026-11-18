@@ -109,3 +109,51 @@ def stop_following():
     if _state["stop"] is not None:
         _state["stop"].set()
     _state["thread"] = _state["stop"] = None
+
+
+def move_to_foreground_desktop(hwnds, fg=None):
+    """One-shot: put `hwnds` on the virtual desktop showing `fg` (default: the current
+    foreground window). Used by windows that are created hidden on whichever desktop
+    Hubi started on and must appear where the user is. Returns True if anything moved."""
+    ole32 = ctypes.oledll.ole32
+    try:
+        ole32.CoInitializeEx(None, 2)
+    except OSError:
+        pass
+    manager = ctypes.c_void_p()
+    try:
+        ole32.CoCreateInstance(
+            ctypes.byref(_guid(CLSID_VirtualDesktopManager)), None, 1 | 4,
+            ctypes.byref(_guid(IID_IVirtualDesktopManager)), ctypes.byref(manager),
+        )
+    except OSError:
+        return False
+    moved = False
+    try:
+        fg = fg or _user32.GetForegroundWindow()
+        if not fg:
+            return False
+        get_desktop_id = _method(manager, _GET_DESKTOP_ID, wintypes.HWND, ctypes.POINTER(GUID))
+        move_to_desktop = _method(manager, _MOVE_TO_DESKTOP, wintypes.HWND, ctypes.POINTER(GUID))
+        is_on_current = _method(manager, _IS_ON_CURRENT, wintypes.HWND, ctypes.POINTER(wintypes.BOOL))
+        desktop = GUID()
+        get_desktop_id(manager, fg, ctypes.byref(desktop))
+        if desktop.Data1 == 0 and desktop.Data2 == 0 and desktop.Data3 == 0 and not any(desktop.Data4):
+            return False
+        for h in hwnds:
+            try:
+                on = wintypes.BOOL()
+                is_on_current(manager, h, ctypes.byref(on))
+                if not on.value:
+                    move_to_desktop(manager, h, ctypes.byref(desktop))
+                    moved = True
+            except OSError:
+                continue
+    except OSError:
+        pass
+    finally:
+        try:
+            _method(manager, _RELEASE)(manager)
+        except Exception:
+            pass
+    return moved

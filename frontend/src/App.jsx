@@ -57,8 +57,8 @@ import 'prismjs/components/prism-toml'
 import 'prismjs/components/prism-docker'
 import {
   IconFolder,
-  IconFile,
   IconUndo,
+  IconClaude,
   IconLayers,
   IconBranch,
   IconArrowUp,
@@ -95,12 +95,88 @@ import {
   IconPalette,
   IconPlay,
 } from './icons'
+import { AGENT_META, AgentPicker, AiSettingsPage, agentOptions, useAiAgents } from './aiSettings'
+import AiComposer from './aiComposer'
+import AiConversation from './aiConversation'
+import { AppIcon, Segmented } from './settingsUi'
+import { FileTypeIcon } from './fileIcons'
+import ProjectSearch from './projectSearch'
+import { TestsPanel } from './testsPanel'
+import { HttpPanel } from './httpPanel'
+import { OverviewPanel } from './overviewPanel'
+import { TasksPanel } from './tasksPanel'
 import { CodeEditor, FilePreview, draftStore, previewKindForFile, referenceTarget } from './codeEditor'
 import { HubiTasksModal } from './hubiTasks'
 import { HubiPage } from './hubiPanel'
+import { EditableIcon, IconBox } from './projectIcon'
 
+// pywebview creates `window.pywebview.api` first and fills in the Python methods a
+// moment later. During that window any `api().something()` used to throw
+// "something is not a function" and take the whole app down. The object returned
+// here waits for a missing method while the bridge is still incomplete, so a call
+// made at startup just resolves a little later; once the bridge is complete, a
+// method that doesn't exist is simply undefined, as before.
+const bridgeProxies = new WeakMap()
 function api() {
-  return window.pywebview?.api
+  const raw = window.pywebview?.api
+  if (!raw) return undefined
+  let proxy = bridgeProxies.get(raw)
+  if (!proxy) {
+    proxy = new Proxy(raw, {
+      get(target, name) {
+        const value = target[name]
+        if (typeof value === 'function') return value.bind(target)
+        // Not a method name (or not a string): never pretend to be a thenable etc.
+        if (typeof name !== 'string' || name === 'then' || name === 'toJSON' || value !== undefined) return value
+        if (typeof target.list_repos === 'function') return undefined // bridge complete: really absent
+        return (...args) =>
+          new Promise((resolve, reject) => {
+            let tries = 0
+            const attempt = () => {
+              if (typeof target[name] === 'function') {
+                Promise.resolve()
+                  .then(() => target[name](...args))
+                  .then(resolve, reject)
+              } else if (tries++ < 100) setTimeout(attempt, 100)
+              else reject(new Error(`${name} indisponible`))
+            }
+            attempt()
+          })
+      },
+    })
+    bridgeProxies.set(raw, proxy)
+  }
+  return proxy
+}
+
+// pywebview creates `window.pywebview.api` first and attaches the Python methods
+// to it a moment later: the object existing is not enough to call anything on it
+// ("get_theme is not a function" at startup). A core method tells it is complete.
+function bridgeReady() {
+  return typeof window.pywebview?.api?.list_repos === 'function'
+}
+
+// Runs `fn(api)` once the named method exists, retrying for a few seconds.
+function whenApiHas(name, fn) {
+  let alive = true
+  let tries = 0
+  const attempt = () => {
+    if (!alive) return
+    const a = api()
+    if (typeof a?.[name] === 'function') {
+      try {
+        fn(a)
+      } catch {
+        // the bridge can vanish while the window closes
+      }
+    } else if (tries++ < 80) {
+      setTimeout(attempt, 100)
+    }
+  }
+  attempt()
+  return () => {
+    alive = false
+  }
 }
 
 // Multiple views can attach to the same PTY (e.g. a repo's Run tab and the
@@ -425,9 +501,7 @@ function ProjectRow({ repo, isRunning, onOpen, onStop, onStart, terminals, onNot
         className="h-3.5 w-3.5 shrink-0 cursor-pointer"
       />
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${isRunning ? 'bg-success' : 'bg-border-strong'}`} />
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
-        <IconFolder className="h-3.5 w-3.5" />
-      </span>
+      <IconBox icon={repo.icon} fallback={<IconFolder className="h-3.5 w-3.5" />} className="h-6 w-6 rounded-md" />
       <div className="min-w-0 flex-1">
         <span className="truncate text-[13px] font-medium text-text">{repo.name}</span>
         {defaultRun && (
@@ -494,9 +568,7 @@ function GroupMemberRow({ repo, selected, onToggleSelect, isRunning, runningCoun
         title="Inclure dans le lancement du groupe"
         className="h-3.5 w-3.5 shrink-0 cursor-pointer"
       />
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
-        <IconFolder className="h-3.5 w-3.5" />
-      </span>
+      <IconBox icon={repo.icon} fallback={<IconFolder className="h-3.5 w-3.5" />} className="h-6 w-6 rounded-md" />
       <span className="truncate text-[13px] font-medium text-text">{repo.name}</span>
       {branch && (
         <span className="flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted">
@@ -1056,63 +1128,6 @@ function EnvPanel({ repo, onNotify, refreshSignal }) {
   )
 }
 
-function HistoryPanel({ repo, refreshSignal }) {
-  const [commits, setCommits] = useState(null)
-  const [limit, setLimit] = useState(50)
-  const [search, setSearch] = useState('')
-
-  const load = useCallback(async () => {
-    const result = await api().git_log(repo.path, limit)
-    setCommits(result?.error ? [] : result?.commits || [])
-  }, [repo.path, limit])
-
-  useEffect(() => {
-    load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [load, refreshSignal])
-
-  const filtered = (commits || []).filter((c) => {
-    const q = search.trim().toLowerCase()
-    if (!q) return true
-    return c.subject.toLowerCase().includes(q) || c.author.toLowerCase().includes(q) || c.short.includes(q)
-  })
-
-  return (
-    <div className="flex flex-col gap-2">
-      <input
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Filtrer par message, auteur ou hash…"
-        className="w-full rounded-md border border-border bg-base px-2.5 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
-      />
-      {commits === null ? (
-        <p className="text-xs text-muted">Chargement…</p>
-      ) : filtered.length === 0 ? (
-        <p className="text-xs text-muted">Aucun commit{search ? ` pour "${search}"` : ''}.</p>
-      ) : (
-        <div className="flex max-h-[28rem] flex-col overflow-y-auto rounded-lg border border-border bg-surface">
-          {filtered.map((c) => (
-            <div key={c.hash} className="flex items-start gap-2.5 border-b border-border px-2.5 py-2 text-[11px] last:border-b-0">
-              <span className="mt-0.5 shrink-0 rounded bg-accent-bg px-1.5 py-0.5 font-mono text-[10px] text-accent">{c.short}</span>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-text">{c.subject}</p>
-                <p className="truncate font-mono text-[10px] text-muted">
-                  {c.author} · {new Date(c.date).toLocaleString()}
-                </p>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {commits && commits.length >= limit && (
-        <Button variant="ghost" className="self-start" onClick={() => setLimit((l) => l + 50)}>
-          Charger plus
-        </Button>
-      )}
-    </div>
-  )
-}
-
 function ContributorsPanel({ repo, branches, currentBranch, refreshSignal }) {
   const [contributors, setContributors] = useState(null)
   const [branch, setBranch] = useState(currentBranch || 'HEAD')
@@ -1415,7 +1430,6 @@ function IgnorePanel({ repo, status, onNotify, onRefresh, refreshSignal }) {
   )
 }
 
-const CLI_PROVIDER_IDS = ['claude-code', 'codex', 'cli']
 
 const ANSI = {
   reset: '\x1b[0m',
@@ -1494,19 +1508,192 @@ async function copyText(text) {
 // xterm.js needs real color values (not CSS variables) at construction time
 // and on every theme switch, since its own <canvas> rendering is outside
 // Tailwind/CSS's reach entirely.
-function readTerminalThemeColors() {
+function readTerminalThemeColors(agent = false) {
   const style = getComputedStyle(document.documentElement)
   return {
     background: style.getPropertyValue('--color-base').trim() || '#0a0a0c',
     foreground: style.getPropertyValue('--color-text').trim() || '#d4d4d8',
+    // Claude Code draws its mascot in "red": with xterm's default palette it
+    // comes out as a harsh pure red. Its clay orange is what it means to be.
+    ...(agent ? { red: '#d97757', brightRed: '#e8896b' } : {}),
   }
+}
+
+// A dialog the CLI is asking you to answer (permission, /rewind, /model…):
+// a list with a ❯ marker on the current choice. Returns what to show in the
+// composer — the question and context above, the options, which one is
+// selected — plus the screen row where it starts (the terminal masks it).
+const DIALOG_FOOTER = /(enter to (select|confirm|continue)|esc to (cancel|exit|go back|close)|↑\/↓ to (navigate|select)|tab to amend)/i
+const BOX_ONLY = /^[╭╮╰╯─━═│┃┌┐└┘\s-]*$/
+const strip = (l) => l.replace(/^[\s│┃|]+/, '').replace(/[\s│┃|]+$/, '')
+const MARK = /^(❯|›|>)\s?/
+function findCliDialog(lines) {
+  let last = lines.length - 1
+  while (last >= 0 && !lines[last].trim()) last--
+  if (last < 2) return null
+  const rewind = findRewindList(lines, last)
+  if (rewind) return rewind
+  const footerSeen = lines.slice(Math.max(0, last - 3), last + 1).some((l) => DIALOG_FOOTER.test(l))
+  // Selected choice: the lowest ❯ line that sits in the bottom block.
+  let m = -1
+  for (let i = last; i >= Math.max(0, last - 25); i--) {
+    if (MARK.test(strip(lines[i]))) {
+      m = i
+      break
+    }
+  }
+  if (m < 0) return null
+  const numbered = /^\d+\.\s/.test(strip(lines[m]).replace(MARK, ''))
+  if (!numbered && !footerSeen) return null
+  const optionLine = (i) => {
+    const t = strip(lines[i])
+    if (!t || BOX_ONLY.test(lines[i]) || CLI_RULE.test(t) || DIALOG_FOOTER.test(t)) return null
+    return t.replace(MARK, '')
+  }
+  let start = m
+  while (start - 1 >= 0 && optionLine(start - 1) !== null && (!numbered || /^\d+\.\s/.test(optionLine(start - 1)))) start--
+  let end = m
+  while (end + 1 <= last && optionLine(end + 1) !== null && (!numbered || /^\d+\.\s/.test(optionLine(end + 1)))) end++
+  if (end - start < 1 && !footerSeen) return null
+  const options = []
+  for (let i = start; i <= end; i++) options.push(optionLine(i))
+  // Question + context above the options, up to a rule / two blank lines.
+  const context = []
+  let top = start
+  let blanks = 0
+  for (let i = start - 1; i >= 0 && context.length < 40; i--) {
+    const raw = lines[i]
+    const t = strip(raw)
+    if (CLI_RULE.test(t) || /^[╭╰]/.test(raw.trim())) {
+      top = i
+      break
+    }
+    if (!t) {
+      if (++blanks >= 2) break
+      context.unshift('')
+      top = i
+      continue
+    }
+    blanks = 0
+    if (BOX_ONLY.test(raw)) continue
+    context.unshift(t)
+    top = i
+  }
+  while (context.length && !context[0]) context.shift()
+  // Rewind's confirmation: the sentence that asks is the title; what follows
+  // (the message, what will happen) is the context.
+  const ask = context.findIndex((l) => /^confirm you want to restore/i.test(l))
+  if (ask >= 0) {
+    return { top, title: context[ask], context: context.slice(ask + 1).filter(Boolean), options, selected: m - start }
+  }
+  const title = context.length ? context[context.length - 1] : ''
+  return { top, title, context: context.slice(0, -1), options, selected: m - start }
+}
+
+// /rewind's first screen: a header, then one entry per earlier message — its
+// text, and under it what restoring would do to the code ("No code changes",
+// "⚠ No code restore"…) — and "(current)". The ❯ marks the selected entry.
+const REWIND_HEAD = /restore the code and\/or conversation/i
+const REWIND_DETAIL = /^(⚠|No code|\+\d|-\d|\d+ files? )/i
+function findRewindList(lines, last) {
+  const h = lines.findIndex((l, i) => i <= last && REWIND_HEAD.test(l))
+  if (h < 0) return null
+  const items = []
+  for (let i = h + 1; i <= last; i++) {
+    const raw = strip(lines[i])
+    if (!raw) continue
+    if (DIALOG_FOOTER.test(raw)) break
+    const marked = MARK.test(raw)
+    const text = raw.replace(MARK, '')
+    if (REWIND_DETAIL.test(text) && items.length && !marked) {
+      items[items.length - 1].detail = text
+      continue
+    }
+    items.push({ label: text, detail: '', selected: marked })
+  }
+  if (!items.length) return null
+  const header = h > 0 && /^rewind$/i.test(strip(lines[h - 1])) ? h - 1 : h
+  return {
+    kind: 'rewind',
+    top: header,
+    title: strip(lines[h]),
+    context: [],
+    options: items.map((it) => it.label),
+    details: items.map((it) => it.detail),
+    selected: Math.max(0, items.findIndex((it) => it.selected)),
+  }
+}
+
+// Claude Code's idle prompt: a rule, the ❯ line(s), a rule, then a footer that
+// names the mode. Returns the screen row where that box starts, or null when
+// something else (a permission dialog, a menu) owns the bottom of the screen.
+const CLI_RULE = /^[─━═]{8,}$/
+const CLI_FOOTER = /(shift\+tab to cycle|\? for shortcuts|bypass permissions|accept edits|plan mode|auto mode|esc to interrupt|for agents|\/effort)/i
+function findCliInputTop(lines) {
+  let last = lines.length - 1
+  while (last >= 0 && !lines[last].trim()) last--
+  if (last < 3) return null
+  const isRule = (l) => CLI_RULE.test(l.trim())
+  // Bottom rule of the box: one of the last few lines (a warning or the mode
+  // footer may sit under it).
+  let r2 = -1
+  for (let i = last; i >= Math.max(0, last - 6); i--) {
+    if (isRule(lines[i])) {
+      r2 = i
+      break
+    }
+  }
+  if (r2 < 0) return null
+  // Top rule, with the ❯ line right under it — and not a numbered choice,
+  // which is a dialog.
+  let r1 = -1
+  for (let i = r2 - 1; i >= 0 && r2 - i <= 12; i--) {
+    if (isRule(lines[i])) {
+      r1 = i
+      break
+    }
+  }
+  if (r1 < 0 || r2 - r1 < 2) return null
+  const first = lines[r1 + 1].trim()
+  if (!/^[❯>]/.test(first) || /^[❯>]\s*\d+\./.test(first)) return null
+  if (lines.slice(r2 + 1, last + 1).some((l) => DIALOG_FOOTER.test(l))) return null
+  while (r1 > 0 && isRule(lines[r1 - 1])) r1-- // a rule wider than the terminal wraps
+  return r1
 }
 
 function PtyTerminal({
   terminalId, startFn, onReady, onExited, onNotify, onUrlDetected, className, closeOnUnmount, colorize = true,
-  fontSize = 16, fitToContainer = true, fixedCols = 240,
+  fontSize = 16, fitToContainer = true, fixedCols = 240, onScreen, hideCliInput = false, onType, onMaskClick, onDialog,
 }) {
   const containerRef = useRef(null)
+  const wrapperRef = useRef(null)
+  // hideCliInput: cover the CLI's own prompt box (Claude Code's) while it sits
+  // idle at the bottom — a composer outside the terminal replaces it.
+  const [mask, setMask] = useState(null) // { top, kind: 'input' | 'dialog' }
+  const hideInputRef = useRef(hideCliInput)
+  hideInputRef.current = hideCliInput
+  const onDialogRef = useRef(onDialog)
+  onDialogRef.current = onDialog
+  const maskedRef = useRef(false)
+  maskedRef.current = hideCliInput && mask?.kind === 'input'
+  const onTypeRef = useRef(onType)
+  onTypeRef.current = onType
+  const sampleRef = useRef(null)
+  useEffect(() => {
+    if (!hideCliInput) {
+      setMask(null)
+      return undefined
+    }
+    sampleRef.current?.()
+    // Writes trigger samples already; this catches a redraw that landed mid-sample.
+    const id = setInterval(() => sampleRef.current?.(), 1000)
+    return () => clearInterval(id)
+  }, [hideCliInput])
+  // Latest visible screen text, for callers that react to what the CLI shows
+  // (current mode, "esc to interrupt" while it works). Sampled, not streamed.
+  const onScreenRef = useRef(onScreen)
+  onScreenRef.current = onScreen
+  const screenTimer = useRef(null)
   const idRef = useRef(terminalId || null)
   const termRef = useRef(null)
   const searchAddonRef = useRef(null)
@@ -1529,13 +1716,16 @@ function PtyTerminal({
       // is a full-screen terminal UI: a tiny, tightly-spaced canvas makes it
       // feel unlike its native Windows Terminal session even when the PTY
       // dimensions are correct.
-      fontFamily: "'Cascadia Mono', Consolas, ui-monospace, monospace",
+      // Cascadia draws the text; a Nerd Font, if the machine has one, only fills in
+      // the icon glyphs of prompts such as oh-my-posh / starship (otherwise they show as boxes).
+      fontFamily:
+        "'Cascadia Mono', 'MesloLGLDZ Nerd Font Mono', 'MesloLGS NF', 'CaskaydiaCove Nerd Font Mono', 'JetBrainsMono Nerd Font Mono', 'FiraCode Nerd Font Mono', 'Hack Nerd Font Mono', Consolas, ui-monospace, monospace",
       fontSize,
       // Claude's logo and separators are made of terminal block glyphs.
       // Their cells must stay square: an expanded line height makes the
       // artwork appear vertically cut apart versus Windows Terminal.
       lineHeight: 1,
-      theme: readTerminalThemeColors(),
+      theme: readTerminalThemeColors(!colorize),
     })
     const fitAddon = new FitAddon()
     const searchAddon = new SearchAddon()
@@ -1592,12 +1782,61 @@ function PtyTerminal({
         setSearchOpen(false)
         return false
       }
+      // The CLI's own input box is hidden: typing on the terminal goes to the
+      // composer instead of vanishing into it. Dialogs (permissions, menus)
+      // show no mask, so their keys still reach the CLI.
+      if (maskedRef.current && e.type === 'keydown' && e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+        onTypeRef.current?.(e.key)
+        return false
+      }
       return true
     })
 
     term.onData((data) => {
+      // Focus reports (ESC [ I / ESC [ O) are sent whenever the terminal
+      // gains/loses focus — now constantly, with the composer next to it — and
+      // some CLIs print them as literal "^[[O" when they didn't ask for them.
+      if (data === '\x1b[I' || data === '\x1b[O') return
       if (idRef.current) api().write_terminal(idRef.current, data)
     })
+
+    // Sampled view of the screen, for the callers that react to what the CLI
+    // draws (see onScreen / hideCliInput).
+    const sampleScreen = () => {
+      if ((!onScreenRef.current && !hideInputRef.current && !onDialogRef.current) || screenTimer.current) return
+      screenTimer.current = setTimeout(() => {
+        screenTimer.current = null
+        const buf = term.buffer.active
+        const lines = []
+        for (let y = buf.baseY; y < buf.baseY + term.rows; y++) {
+          const line = buf.getLine(y)
+          if (line) lines.push(line.translateToString(true))
+        }
+        onScreenRef.current?.(lines.join('\n'))
+        const atBottom = buf.viewportY === buf.baseY
+        // Idle prompt box first; otherwise a dialog (permission, menu, rewind)
+        // that the composer shows as buttons instead.
+        let row = atBottom ? findCliInputTop(lines) : null
+        let kind = 'input'
+        let dialog = null
+        if (row === null && atBottom) {
+          dialog = findCliDialog(lines)
+          row = dialog ? dialog.top : null
+          kind = 'dialog'
+        }
+        onDialogRef.current?.(dialog)
+        const cell = term._core?._renderService?.dimensions?.css?.cell?.height
+        const wrap = wrapperRef.current
+        if (!hideInputRef.current || row === null || !cell || !wrap || !term.element) {
+          setMask(null)
+        } else {
+          const offset = term.element.getBoundingClientRect().top - wrap.getBoundingClientRect().top
+          setMask({ top: Math.round(offset + row * cell), kind })
+        }
+      }, 250)
+    }
+    sampleRef.current = sampleScreen
+    term.onScroll(sampleScreen)
 
     let unsubscribe = null
 
@@ -1614,6 +1853,7 @@ function PtyTerminal({
         // split, desyncing xterm's parser and silently killing color for
         // the rest of the session. Only run it where it's actually needed.
         term.write(colorize ? colorizeChunk(data) : data)
+        sampleScreen()
         if (onUrlDetected) {
           const found = extractServerUrl(data)
           if (found) onUrlDetected(found)
@@ -1666,6 +1906,7 @@ function PtyTerminal({
 
     function handleResize() {
       resizeTerminal()
+      sampleScreen()
       if (idRef.current) api().resize_terminal(idRef.current, term.rows, term.cols)
     }
     window.addEventListener('resize', handleResize)
@@ -1673,7 +1914,7 @@ function PtyTerminal({
     resizeObserver.observe(containerRef.current)
 
     const themeObserver = new MutationObserver(() => {
-      term.options.theme = readTerminalThemeColors()
+      term.options.theme = readTerminalThemeColors(!colorize)
     })
     themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 
@@ -1682,6 +1923,8 @@ function PtyTerminal({
       resizeObserver.disconnect()
       themeObserver.disconnect()
       unsubscribe?.()
+      clearTimeout(screenTimer.current)
+      screenTimer.current = null
       if (closeOnUnmount && idRef.current) api().close_terminal(idRef.current)
       searchAddonRef.current = null
       termRef.current = null
@@ -1707,8 +1950,18 @@ function PtyTerminal({
   }
 
   return (
-    <div className="relative flex min-h-0 flex-1 flex-col">
+    <div ref={wrapperRef} className="relative flex min-h-0 flex-1 flex-col">
       <div ref={containerRef} className={className || 'flex-1 overflow-hidden bg-base p-2'} />
+      {hideCliInput && mask && (
+        <div
+          style={{ top: mask.top }}
+          onMouseDown={(e) => {
+            e.preventDefault()
+            onMaskClick?.()
+          }}
+          className="absolute inset-x-0 bottom-0 z-[5] cursor-text bg-base"
+        />
+      )}
       <div className="absolute right-2 top-2 z-10 flex items-center gap-1">
         <button
           onClick={copySelection}
@@ -1822,72 +2075,223 @@ function firstAiPicker(node) {
   return firstAiPicker(node.a) || firstAiPicker(node.b)
 }
 
-function AiPaneTerminal({ repo, session, prompt, onNotify }) {
-  const startFn = useRef(({ rows, cols }) => api().start_terminal(repo.path, session, prompt || null, rows, cols)).current
-  return <PtyTerminal startFn={startFn} onNotify={onNotify} closeOnUnmount colorize={false} />
+function AiPaneTerminal({ repo, session, prompt, provider, agentKind, agentId, onNotify }) {
+  // `epoch` > 0: the session is started again (see undoRewind) — resumed by its
+  // id, without re-sending the task that opened the pane.
+  const [epoch, setEpoch] = useState(0)
+  const liveSession = useRef(session || null)
+  const startFn = useMemo(
+    () => ({ rows, cols }) =>
+      api().start_terminal(repo.path, epoch ? liveSession.current : session, epoch ? null : prompt || null, rows, cols, provider || null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [epoch],
+  )
+  // After a rewind, until the next message is sent, the transcript on disk still
+  // holds the conversation as it was: starting the CLI again from it undoes the
+  // rewind. Once a message goes out, the old branch is abandoned for good.
+  const [undoable, setUndoable] = useState(false)
+  function undoRewind() {
+    setUndoable(false)
+    setScreen('')
+    setDialog(null)
+    setTerminalId(null)
+    composerControl.current?.reset()
+    convoControl.current?.reload()
+    setEpoch((e) => e + 1)
+  }
+  const startedAt = useRef(Date.now() / 1000).current
+  const [terminalId, setTerminalId] = useState(null)
+  const [screen, setScreen] = useState('')
+  const [working, setWorking] = useState(false)
+  // The conversation is drawn from the CLI's transcript; the real terminal
+  // keeps running underneath (it is the agent) and only shows when the CLI has
+  // no transcript to read (another CLI than Claude / Codex).
+  const canChat = agentKind === 'claude' || agentKind === 'codex'
+  const [view, setView] = useState(canChat ? 'chat' : 'terminal')
+  const composerControl = useRef(null)
+  const convoControl = useRef(null)
+  const rewindTarget = useRef(null) // the message "revenir ici" was clicked on
+  // A question the CLI is asking (permission, /rewind…): answered from the
+  // composer, so the terminal never has to be touched.
+  const [dialog, setDialog] = useState(null)
+  const sameDialog = useCallback(
+    (next) => setDialog((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next)),
+    [],
+  )
+  const meta = AGENT_META[agentId]
+  const chat = canChat && view === 'chat'
+  return (
+    <>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* Hidden, not unmounted — and still full-size, so the PTY keeps its dimensions. */}
+        <div className={chat ? 'pointer-events-none invisible absolute inset-0 flex flex-col' : 'flex min-h-0 flex-1 flex-col'}>
+          <PtyTerminal
+            startFn={startFn}
+            onReady={setTerminalId}
+            onScreen={setScreen}
+            onDialog={sameDialog}
+            onNotify={onNotify}
+            closeOnUnmount
+            colorize={false}
+          />
+        </div>
+        {chat && (
+          <AiConversation
+            repo={repo}
+            provider={provider || null}
+            session={session}
+            startedAt={startedAt}
+            working={working}
+            agentLabel={meta?.label || "l'agent"}
+            Logo={meta?.Logo}
+            onRewind={(text, nth, id, edit) => {
+              rewindTarget.current = id
+              composerControl.current?.rewindTo(text, nth, edit)
+            }}
+            controlRef={convoControl}
+            onSession={(id) => {
+              if (id) liveSession.current = id
+            }}
+            onCopy={copyText}
+            onUnsupported={() => setView('terminal')}
+          />
+        )}
+      </div>
+      <AiComposer
+        repo={repo}
+        provider={provider || null}
+        terminalId={terminalId}
+        screen={screen}
+        dialog={dialog}
+        controlRef={composerControl}
+        onWorking={setWorking}
+        onRestored={() => convoControl.current?.truncateAt(rewindTarget.current)}
+        onRewindFailed={() => {
+          setUndoable(false)
+          convoControl.current?.reload()
+        }}
+        undoable={undoable}
+        onRewound={() => setUndoable(true)}
+        onSent={() => setUndoable(false)}
+        onUndoRewind={undoRewind}
+        onDismissUndo={() => setUndoable(false)}
+        onNotify={onNotify}
+      />
+    </>
+  )
 }
 
-function AiSessionPicker({ aiSettings, sessions, openIds, onPick }) {
+function AiSessionPicker({ agent, agentOpts, kind, onAgentChange, sessions, openIds, onPick }) {
   const [search, setSearch] = useState('')
   const filtered = sessions.filter((s) => s.title.toLowerCase().includes(search.toLowerCase()))
+  const meta = AGENT_META[agent]
+  const agentName = meta?.full || "l'agent"
+  const listable = kind === 'claude' || kind === 'codex'
+  const subtitle = !listable
+    ? 'Ouvre une session directement dans ce panneau.'
+    : sessions.length === 0
+      ? 'Aucune session pour ce repo pour le moment.'
+      : `${sessions.length} session${sessions.length > 1 ? 's' : ''} sur ce repo`
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted">
-          CLI actif : <span className="font-medium text-text">{IDE_LABELS[aiSettings.provider] || aiSettings.provider}</span>
-        </span>
-        <Button variant="primary" onClick={() => onPick(null)}>
-          <IconTerminal className="h-3.5 w-3.5" />
-          Nouvelle session
-        </Button>
-      </div>
-
-      {aiSettings.provider !== 'claude-code' ? (
-        <p className="text-xs text-muted">
-          Liste des sessions non disponible pour ce CLI — clique sur "Nouvelle session" pour l'ouvrir ici.
-        </p>
-      ) : sessions.length === 0 ? (
-        <EmptyState message="Aucune session Claude Code trouvée pour ce repo." size="sm" />
-      ) : (
-        <>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Rechercher une session…"
-            className="rounded-md border border-border bg-surface px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
-          />
-          {filtered.length === 0 ? (
-            <EmptyState message={`Aucune session ne correspond à "${search}".`} size="sm" />
-          ) : (
-            <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-surface p-1.5">
-              {filtered.map((s) => (
-                <div key={s.id} className="flex items-center justify-between gap-3 rounded-md px-3 py-2 hover:bg-surface-hover">
-                  <div className="min-w-0">
-                    <p className="truncate text-xs text-text">{s.title}</p>
-                    <p className="font-mono text-[10px] text-muted">{new Date(s.modified * 1000).toLocaleString()}</p>
-                  </div>
-                  <Button variant="ghost" disabled={openIds.has(s.id)} onClick={() => onPick(s.id)}>
-                    {openIds.has(s.id) ? 'Ouverte' : 'Reprendre'}
-                  </Button>
-                </div>
-              ))}
-            </div>
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-[640px] flex-col gap-7 px-6 py-10">
+        <header className="flex flex-col items-center gap-3 text-center">
+          <AppIcon size={56}>{meta?.Logo && <meta.Logo className="h-7 w-7" />}</AppIcon>
+          <div>
+            <h3 className="text-[20px] font-semibold tracking-tight text-text">{agentName}</h3>
+            <p className="mt-0.5 text-[13px] text-muted">{subtitle}</p>
+          </div>
+          {agentOpts.length > 1 && (
+            <Segmented
+              options={agentOpts.map((o) => ({ value: o.id, label: o.label, Logo: o.Logo }))}
+              value={agent}
+              onChange={onAgentChange}
+            />
           )}
-        </>
-      )}
+          <button
+            onClick={() => onPick(null)}
+            className="mt-1 flex cursor-pointer items-center gap-2 rounded-full bg-accent px-5 py-2 text-[13.5px] font-medium text-white shadow-sm transition-all duration-150 hover:brightness-110 active:scale-[0.98]"
+          >
+            <IconPlus className="h-4 w-4" />
+            Nouvelle session {meta?.label}
+          </button>
+        </header>
+
+        {listable && sessions.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <h4 className="px-4 text-[12px] font-medium uppercase tracking-wide text-muted">Reprendre</h4>
+            <div className="overflow-hidden rounded-[10px] bg-surface">
+              <label className="flex items-center gap-2.5 border-b border-border/70 px-4 py-2.5">
+                <IconSearch className="h-3.5 w-3.5 shrink-0 text-muted" />
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Rechercher une session"
+                  className="min-w-0 flex-1 bg-transparent text-[13.5px] text-text outline-none placeholder:text-muted/60"
+                />
+              </label>
+              {filtered.length === 0 ? (
+                <p className="px-4 py-6 text-center text-[13px] text-muted">Aucune session ne correspond à « {search} ».</p>
+              ) : (
+                filtered.map((s) => {
+                  const open = openIds.has(s.id)
+                  return (
+                    <div
+                      key={s.id}
+                      role="button"
+                      tabIndex={open ? -1 : 0}
+                      onClick={open ? undefined : () => onPick(s.id)}
+                      onKeyDown={(e) => !open && (e.key === 'Enter' || e.key === ' ') && onPick(s.id)}
+                      className={`group/row relative flex min-h-[52px] items-center gap-3 px-4 py-2 outline-none transition-colors after:absolute after:bottom-0 after:left-[60px] after:right-0 after:h-px after:bg-border/70 last:after:hidden ${
+                        open ? 'opacity-60' : 'cursor-pointer hover:bg-surface-hover focus-visible:bg-surface-hover'
+                      }`}
+                    >
+                      <AppIcon size={30}>{meta?.Logo && <meta.Logo className="h-4 w-4" />}</AppIcon>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[14px] text-text">{s.title}</span>
+                        <span className="block text-[12px] text-muted">{sessionAge(s.modified)}</span>
+                      </span>
+                      <span className={`shrink-0 text-[13px] ${open ? 'text-muted' : 'text-accent opacity-0 transition-opacity group-hover/row:opacity-100'}`}>
+                        {open ? 'Ouverte' : 'Reprendre'}
+                      </span>
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
+}
+
+function sessionAge(seconds) {
+  if (!seconds) return ''
+  const diff = Math.max(0, Date.now() / 1000 - seconds)
+  if (diff < 60) return "à l'instant"
+  if (diff < 3600) return `il y a ${Math.floor(diff / 60)} min`
+  if (diff < 86400) return `il y a ${Math.floor(diff / 3600)} h`
+  if (diff < 86400 * 7) return `il y a ${Math.floor(diff / 86400)} j`
+  return new Date(seconds * 1000).toLocaleDateString()
 }
 
 // Launch requests already turned into a terminal: the panel can remount
 // (tab switches), and must not start the same task twice.
 const consumedTaskLaunches = new Set()
 
-function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
-  const [aiSettings, setAiSettings] = useState(null)
+function AiSessionsPanel({ repo, onNotify, taskLaunch, onOpenAiSettings }) {
+  // Claude / Codex are both usable here: the logos pick which one the next
+  // session (and the session list) is for; each pane keeps the agent it was
+  // opened with. The saved default only applies until you pick.
+  const { agents, defaultAgent, loaded: agentsLoaded } = useAiAgents()
+  const [pickedAgent, setPickedAgent] = useState(null)
+  const agentOpts = agentOptions(agents)
+  const wanted = pickedAgent ?? defaultAgent
+  const agent = agentOpts.some((o) => o.id === wanted) ? wanted : (agentOpts[0]?.id ?? null)
+  const kind = agents.find((a) => a.id === agent)?.kind
   const [sessions, setSessions] = useState([])
-  const [loading, setLoading] = useState(true)
   const [tree, setTree] = useState(() => newAiLeaf())
   const [fullscreen, setFullscreen] = useState(false)
   const areaRef = useRef(null)
@@ -1904,22 +2308,19 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
     })
   }, [taskLaunch, repo.path])
 
-  const load = useCallback(async () => {
-    setLoading(true)
-    const settings = await api().get_ai_settings()
-    setAiSettings(settings)
-    if (settings?.provider === 'claude-code') {
-      const list = await api().list_claude_sessions(repo.path)
-      setSessions(Array.isArray(list) ? list : [])
-    } else {
-      setSessions([])
-    }
-    setLoading(false)
-  }, [repo.path])
-
   useEffect(() => {
-    load()
-  }, [load])
+    if (!agent || (kind !== 'claude' && kind !== 'codex')) {
+      setSessions([])
+      return
+    }
+    let alive = true
+    api()
+      .list_claude_sessions(repo.path, agent)
+      .then((list) => alive && setSessions(Array.isArray(list) ? list : []))
+    return () => {
+      alive = false
+    }
+  }, [repo.path, agent, kind])
 
   const layout = useMemo(() => {
     const leaves = []
@@ -1952,13 +2353,22 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
     window.addEventListener('mouseup', up)
   }
 
-  if (loading) return <p className="text-xs text-muted">Chargement…</p>
+  if (!agentsLoaded) return <p className="text-xs text-muted">Chargement…</p>
 
-  if (!CLI_PROVIDER_IDS.includes(aiSettings?.provider)) {
+  if (!agent) {
     return (
-      <p className="text-xs text-muted">
-        Configure un CLI (Claude Code, Codex, ou autre) dans Paramètres IA pour utiliser cette section.
-      </p>
+      <div className="flex flex-col items-start gap-2">
+        <p className="text-xs text-muted">
+          Aucun agent IA détecté sur cette machine. Configure Claude Code ou Codex dans les Paramètres IA pour utiliser
+          cette section.
+        </p>
+        {onOpenAiSettings && (
+          <Button variant="ghost" onClick={onOpenAiSettings}>
+            <IconSettings className="h-3.5 w-3.5" />
+            Ouvrir les Paramètres IA
+          </Button>
+        )}
+      </div>
     )
   }
 
@@ -1970,16 +2380,18 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
       className={
         fullscreen
           ? 'fullscreen-below-tabs z-50 flex flex-col overflow-hidden bg-base'
-          : 'flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col overflow-hidden rounded-lg border border-border'
+          : 'flex h-[calc(100vh-14rem)] min-h-[28rem] flex-col overflow-hidden rounded-xl border border-border'
       }
     >
       <div className="flex items-center justify-between border-b border-border bg-surface px-3 py-1.5">
-        <span className="text-xs text-muted">
-          {repo.name} · {layout.leaves.length} panneau{multi ? 'x' : ''}
+        <span className="flex items-center gap-2 text-[12px] text-muted">
+          <span className="font-medium text-text">{repo.name}</span>
+          <span className="text-muted/50">·</span>
+          {layout.leaves.length} panneau{multi ? 'x' : ''}
         </span>
         <button
           onClick={() => setFullscreen((v) => !v)}
-          className="cursor-pointer text-muted hover:text-text"
+          className="cursor-pointer rounded-md p-1 text-muted transition-colors hover:bg-surface-hover hover:text-text"
           title={fullscreen ? 'Quitter le plein écran' : 'Plein écran'}
         >
           <IconMaximize className="h-3.5 w-3.5" />
@@ -1999,27 +2411,32 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
               className="absolute flex min-h-0 min-w-0 flex-col overflow-hidden border border-border bg-base"
               style={{ left: pct(rect.x), top: pct(rect.y), width: pct(rect.w), height: pct(rect.h) }}
             >
-              <div className="flex items-center justify-between gap-2 border-b border-border bg-surface px-2 py-1">
-                <span className="min-w-0 truncate text-[11px] text-muted" title={title}>
-                  {title}
+              <div className="flex items-center justify-between gap-2 border-b border-border bg-surface/70 px-3 py-1">
+                <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted" title={title}>
+                  {leaf.session !== undefined &&
+                    (() => {
+                      const Logo = AGENT_META[leaf.provider || defaultAgent]?.Logo
+                      return Logo ? <Logo className="h-3.5 w-3.5 shrink-0" /> : null
+                    })()}
+                  <span className="truncate">{title}</span>
                 </span>
                 <div className="flex shrink-0 items-center gap-1.5 text-muted">
                   <button
                     onClick={() => setTree((prev) => splitAiLeaf(prev, leaf.id, 'row', newAiLeaf()))}
-                    className="cursor-pointer hover:text-text"
+                    className="cursor-pointer rounded-md p-1 transition-colors hover:bg-surface-hover hover:text-text"
                     title="Diviser à droite"
                   >
                     <IconSplitRight className="h-3.5 w-3.5" />
                   </button>
                   <button
                     onClick={() => setTree((prev) => splitAiLeaf(prev, leaf.id, 'col', newAiLeaf()))}
-                    className="cursor-pointer hover:text-text"
+                    className="cursor-pointer rounded-md p-1 transition-colors hover:bg-surface-hover hover:text-text"
                     title="Diviser en bas"
                   >
                     <IconSplitDown className="h-3.5 w-3.5" />
                   </button>
                   {(multi || leaf.session !== undefined) && (
-                    <button onClick={() => closePane(leaf.id)} className="cursor-pointer hover:text-danger" title="Fermer le panneau">
+                    <button onClick={() => closePane(leaf.id)} className="cursor-pointer rounded-md p-1 transition-colors hover:bg-danger/15 hover:text-danger" title="Fermer le panneau">
                       <IconClose className="h-3.5 w-3.5" />
                     </button>
                   )}
@@ -2027,13 +2444,24 @@ function AiSessionsPanel({ repo, onNotify, taskLaunch }) {
               </div>
               {leaf.session === undefined ? (
                 <AiSessionPicker
-                  aiSettings={aiSettings}
+                  agent={agent}
+                  agentOpts={agentOpts}
+                  kind={kind}
+                  onAgentChange={setPickedAgent}
                   sessions={sessions}
                   openIds={openIds}
-                  onPick={(session) => setTree((prev) => mapAiLeaf(prev, leaf.id, (l) => ({ ...l, session })))}
+                  onPick={(session) => setTree((prev) => mapAiLeaf(prev, leaf.id, (l) => ({ ...l, session, provider: agent })))}
                 />
               ) : (
-                <AiPaneTerminal repo={repo} session={leaf.session} prompt={leaf.prompt} onNotify={onNotify} />
+                <AiPaneTerminal
+                  repo={repo}
+                  session={leaf.session}
+                  prompt={leaf.prompt}
+                  provider={leaf.provider}
+                  agentKind={agents.find((a) => a.id === (leaf.provider || defaultAgent))?.kind}
+                  agentId={leaf.provider || defaultAgent}
+                  onNotify={onNotify}
+                />
               )}
             </div>
           )
@@ -5023,7 +5451,7 @@ function FileTreeNode({ node, depth, expanded, onToggleDir, selectedPath, onSele
           isSelected ? 'bg-accent-bg text-accent' : 'text-muted hover:bg-surface-hover hover:text-text'
         }`}
       >
-        <IconFile className="h-3.5 w-3.5 shrink-0" />
+        <FileTypeIcon name={node.name} className="h-4 w-4 shrink-0" />
         <span className="min-w-0 flex-1 truncate font-mono" title={node.path}>{node.name}</span>
         {node.status && (
           <span
@@ -5165,7 +5593,11 @@ function FileNotice({ message }) {
   )
 }
 
-function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasChanges, onSaved, projectFiles, onOpenFile }) {
+function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasChanges, onSaved, projectFiles, onOpenFile, jump, onAskAi }) {
+  // "Demander à l'IA": the question is typed in a small popover under the
+  // header; what is selected in the file (with its lines) rides along.
+  const [ask, setAsk] = useState(null) // { question, selection }
+  const askInputRef = useRef(null)
   const [content, setContent] = useState(null)
   const [diffRows, setDiffRows] = useState(null)
   const [meta, setMeta] = useState(null)
@@ -5264,7 +5696,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   // browser's own find-in-page on other tabs.
   useEffect(() => {
     function handleKey(e) {
-      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f') return
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.key.toLowerCase() !== 'f') return
       if (!containerRef.current || containerRef.current.offsetParent === null) return
       e.preventDefault()
       searchInputRef.current?.focus()
@@ -5343,7 +5775,9 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
 
   const needle = search.trim().toLowerCase()
   // While editing, the search runs on the text being typed, not on the file.
-  const searchTexts = useMemo(() => (mode === 'edit' ? (draft ?? '').split('\n') : rows.map((r) => r.text)), [mode, draft, rows])
+  // Code view = the file as it is now (removed diff lines are drawn by the editor, not part of the text).
+  const viewText = useMemo(() => rows.filter((r) => r.type !== 'rem').map((r) => r.text.replace(/\r$/, '')).join('\n'), [rows])
+  const searchTexts = useMemo(() => (mode === 'edit' ? (draft ?? '') : viewText).split('\n'), [mode, draft, viewText])
   const matches = useMemo(() => {
     if (!needle) return []
     const found = []
@@ -5361,6 +5795,52 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
     setMatchIndex(0)
   }, [needle])
 
+  // Arriving from the project search: highlight the hit and land on its line.
+  // The file may still be loading, so the target waits until a match is found.
+  const jumpRef = useRef(null)
+  const lastJump = useRef(null)
+  if (jump && jump.nonce !== lastJump.current) {
+    lastJump.current = jump.nonce
+    jumpRef.current = jump
+  }
+  useEffect(() => {
+    if (jump && jump.file === file) setSearch(jump.term || '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jump?.nonce])
+  useEffect(() => {
+    const j = jumpRef.current
+    if (!j || j.file !== file || j.term || loading || mode === 'preview') return
+    jumpRef.current = null
+    const t = setTimeout(() => editorRef.current?.reveal?.(Math.max(0, (j.line || 1) - 1), 0), 250)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, jump?.nonce])
+  useEffect(() => {
+    const j = jumpRef.current
+    if (!j || j.file !== file || matches.length === 0) return
+    const lineOf = (i) => i + 1
+    const k = matches.findIndex((i) => lineOf(i) === j.line)
+    jumpRef.current = null
+    if (k >= 0) setMatchIndex(k)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [matches, rows, mode])
+
+  function openAsk() {
+    // Read the selection now: clicking elsewhere would clear it.
+    const selection = editorRef.current?.getSelection?.() || null
+    setAsk({ question: '', selection })
+    setTimeout(() => askInputRef.current?.focus(), 30)
+  }
+
+  function sendAsk() {
+    const q = (ask?.question || '').trim() || (ask?.selection ? 'Explique ce code' : 'Explique ce fichier')
+    const sel = ask?.selection
+    const where = sel?.fromLine ? ` (lignes ${sel.fromLine}${sel.toLine && sel.toLine !== sel.fromLine ? `-${sel.toLine}` : ''})` : ''
+    const quoted = sel?.text && !sel.fromLine ? ` — extrait : "${sel.text.trim().replace(/\s+/g, ' ').slice(0, 300)}"` : ''
+    onAskAi?.(`${q} — @${file}${where}${quoted}`)
+    setAsk(null)
+  }
+
   useEffect(() => {
     if (matches.length === 0 || mode === 'edit') return
     const targetLine = matches[((matchIndex % matches.length) + matches.length) % matches.length]
@@ -5371,19 +5851,19 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
   // changes (not while typing in the editor, which also changes `matches`).
   useEffect(() => {
     const list = matchesRef.current
-    if (mode !== 'edit' || !needle || list.length === 0) return
+    if ((mode !== 'edit' && mode !== 'code') || !needle || list.length === 0) return
     const line = list[((matchIndex % list.length) + list.length) % list.length]
-    editorRef.current?.reveal(line, (draft ?? '').split('\n')[line]?.toLowerCase().indexOf(needle) ?? 0)
+    editorRef.current?.reveal(line, searchTexts[line]?.toLowerCase().indexOf(needle) ?? 0)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchIndex, needle, mode])
 
   return (
-    <div ref={containerRef} className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-text">
+    <div ref={containerRef} className="@container flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 border-b border-border px-3 py-2">
+        <span className="min-w-[9rem] flex-1 truncate font-mono text-xs text-text">
           {file}
           {lang && <span className="ml-2 rounded border border-border px-1 py-0.5 font-sans text-[10px] uppercase text-muted">{lang}</span>}
-          <span className="ml-2 hidden font-sans text-[10.5px] text-muted/70 xl:inline">Ctrl+clic sur un import pour l'ouvrir</span>
+          <span className="ml-2 hidden font-sans text-[10.5px] text-muted/70 @5xl:inline">Ctrl+clic sur un import pour l'ouvrir</span>
           {dirty && <span className="ml-1.5 text-warning" title="Modifications non enregistrées">●</span>}
           {!dirty && savedAt > 0 && (
             <span className="ml-2 inline-flex items-center gap-1 font-sans text-[11px] text-success">
@@ -5434,7 +5914,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
                 }
               }}
               placeholder="Rechercher (Ctrl+F)…"
-              className="w-40 rounded-md border border-border bg-base px-2 py-1 text-[11px] text-text outline-none focus:border-accent"
+              className="w-28 rounded-md border border-border bg-base px-2 py-1 text-[11px] text-text outline-none focus:border-accent @3xl:w-40"
             />
             {needle && (
               <>
@@ -5461,13 +5941,26 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
             )}
           </div>
         )}
+        {onAskAi && (
+          <button
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => (ask ? setAsk(null) : openAsk())}
+            className={`flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] transition-colors ${
+              ask ? 'border-accent/60 bg-accent-bg text-text' : 'border-border text-muted hover:border-border-strong hover:text-text'
+            }`}
+            title="Poser une question à l'IA sur ce fichier (ou sur la sélection)"
+          >
+            <IconClaude className="h-3.5 w-3.5" />
+            <span className="hidden whitespace-nowrap @3xl:inline">Demander à l'IA</span>
+          </button>
+        )}
         <button
           onClick={async () => {
             // Ctrl+C on a plain selection doesn't reliably reach the real
             // clipboard in this webview — same reason the terminal has its
             // own copy button instead of relying on native copy. Copies the
             // active selection if there is one, otherwise the whole file.
-            const selected = window.getSelection()?.toString()
+            const selected = editorRef.current?.getSelection?.()?.text || window.getSelection()?.toString()
             const text = selected || rows.map((r) => r.text).join('\n')
             const result = await copyText(text)
             onNotify(result.ok ? 'Copié dans le presse-papier' : `Échec de la copie : ${result.reason}`, !result.ok)
@@ -5480,6 +5973,8 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
         <Button
           variant="ghost"
           disabled={opening}
+          className="shrink-0 whitespace-nowrap !px-2 @3xl:!px-3"
+          title={`Ouvrir dans ${IDE_LABELS[repo.ide] || repo.ide || "l'éditeur"}`}
           onClick={async () => {
             setOpening(true)
             const result = await api().open_file_in_ide(repo.path, file)
@@ -5488,7 +5983,7 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
           }}
         >
           <IconExternal className="h-3.5 w-3.5" />
-          Ouvrir dans {IDE_LABELS[repo.ide] || repo.ide || "l'éditeur"}
+          <span className="hidden @3xl:inline">Ouvrir dans {IDE_LABELS[repo.ide] || repo.ide || "l'éditeur"}</span>
         </Button>
         <button
           onClick={onToggleFullscreen}
@@ -5499,6 +5994,47 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
         </button>
       </div>
 
+      {ask && (
+        <div className="flex items-start gap-2 border-b border-border bg-surface-hover/40 px-3 py-2">
+          <IconClaude className="mt-1 h-4 w-4 shrink-0" />
+          <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+            <input
+              ref={askInputRef}
+              value={ask.question}
+              onChange={(e) => setAsk((a) => ({ ...a, question: e.target.value }))}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  sendAsk()
+                } else if (e.key === 'Escape') setAsk(null)
+              }}
+              placeholder={ask.selection ? 'Que faire de cette sélection ? (Entrée pour envoyer)' : 'Ta question sur ce fichier (Entrée pour envoyer)'}
+              className="w-full rounded-md border border-border bg-base px-2.5 py-1.5 text-[12.5px] text-text outline-none focus:border-accent"
+            />
+            <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted">
+              <span className="rounded border border-border px-1.5 py-0.5 font-mono">
+                {file.split('/').pop()}
+                {ask.selection?.fromLine
+                  ? ` : ${ask.selection.fromLine}${ask.selection.toLine !== ask.selection.fromLine ? `-${ask.selection.toLine}` : ''}`
+                  : ''}
+              </span>
+              {['Explique ce code', 'Trouve les bugs', 'Ajoute des tests', 'Simplifie'].map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setAsk((a) => ({ ...a, question: s }))}
+                  className="cursor-pointer rounded-full border border-border px-2 py-0.5 hover:border-border-strong hover:text-text"
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+          <Button variant="primary" onClick={sendAsk}>
+            Envoyer
+          </Button>
+        </div>
+      )}
       {pendingMode && (
         <ConfirmModal
           title="Modifications non enregistrées"
@@ -5554,63 +6090,20 @@ function FileViewer({ repo, file, onNotify, fullscreen, onToggleFullscreen, hasC
       ) : meta?.error ? (
         <FileNotice message={meta.error} />
       ) : (
-        <div className="theme-scroll flex-1 overflow-auto font-mono text-[11px] leading-relaxed">
-          <div style={{ display: 'table', minWidth: '100%' }}>
-            {rows.map((row, i) => {
-              const isMatch = needle && row.text.toLowerCase().includes(needle)
-              const isCurrentMatch = isMatch && matches[((matchIndex % matches.length) + matches.length) % matches.length] === i
-              const diffBg = row.type === 'add' ? 'bg-success-bg' : row.type === 'rem' ? 'bg-danger-bg' : ''
-              // Only unchanged lines get tokenized — layering token spans
-              // under the solid add/rem text color would just fight it for
-              // no benefit, and the diff status is the more useful signal
-              // on those rows anyway.
-              const html = row.type === 'ctx' ? highlightLine(row.text, lang) : null
-              return (
-                <div
-                  key={i}
-                  ref={(el) => (lineRefs.current[i] = el)}
-                  style={{ display: 'table-row' }}
-                  // A match used to just swap in bg-warning-bg, replacing
-                  // any diff background — two bg-* utilities of equal
-                  // specificity fight over stylesheet order, which is why
-                  // it silently lost to the diff color instead of showing.
-                  // A ring never competes with the background, so it's
-                  // added instead (and only falls back to a background of
-                  // its own on a plain, non-diff row that has none to
-                  // clash with). The current match gets a stronger ring
-                  // than the rest of the "2/2"-style match set.
-                  className={`${diffBg || (isMatch ? 'bg-warning-bg' : '')} ${
-                    isCurrentMatch ? 'ring-2 ring-inset ring-warning' : isMatch ? 'ring-1 ring-inset ring-warning/50' : ''
-                  }`.trim()}
-                >
-                  <div style={{ display: 'table-cell' }} className="w-8 select-none px-1 text-right text-muted/50">
-                    {row.oldLine ?? ''}
-                  </div>
-                  <div style={{ display: 'table-cell' }} className="w-8 select-none px-1 text-right text-muted/50">
-                    {row.newLine ?? ''}
-                  </div>
-                  <div
-                    style={{ display: 'table-cell' }}
-                    onClick={(e) => {
-                      // Ctrl/Cmd+clic on an import or a name opens that file.
-                      if (!(e.ctrlKey || e.metaKey)) return
-                      const offset = clickOffset(e)
-                      if (offset == null) return
-                      const target = referenceTarget(row.text, offset, file, projectFiles, rows.filter((r) => r.type !== 'rem').map((r) => r.text).join('\n'))
-                      if (target) onOpenFile?.(target)
-                      else onNotify('Référence locale introuvable')
-                    }}
-                    className={`select-text cursor-text whitespace-pre px-2 ${
-                      row.type === 'add' ? 'text-success' : row.type === 'rem' ? 'text-danger' : 'text-text'
-                    }`}
-                  >
-                    {html ? <span dangerouslySetInnerHTML={{ __html: html }} /> : row.text || ' '}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
+        <CodeEditor
+          ref={editorRef}
+          value={viewText}
+          readOnly
+          diff={diffRows ? rows : null}
+          highlight={highlight}
+          language={lang}
+          file={file}
+          projectFiles={projectFiles}
+          onOpenFile={onOpenFile}
+          onNotify={onNotify}
+          findTerm={needle}
+          findLine={activeMatchLine}
+        />
       )}
     </div>
   )
@@ -5702,15 +6195,106 @@ function QuickOpenModal({ files, onSelect, onClose }) {
 }
 
 const TREE_MIN = 160
+
+// Open files of a project's Code tab, remembered between launches.
+const codeTabsKey = (repoPath) => `devhub.codeTabs::${repoPath}`
+function readCodeTabs(repoPath) {
+  try {
+    const v = JSON.parse(localStorage.getItem(codeTabsKey(repoPath)) || 'null')
+    if (v && Array.isArray(v.tabs)) return { tabs: v.tabs.filter((t) => typeof t === 'string').slice(0, 30), selected: typeof v.selected === 'string' ? v.selected : null }
+  } catch {
+    // unreadable: start empty
+  }
+  return { tabs: [], selected: null }
+}
+const DOCK_MIN = 120
+const SHELL_LABELS = { cmd: 'CMD', powershell: 'PowerShell', bash: 'Git Bash' }
+
+// One interactive shell of the terminal panel (a real PTY, like the AI sessions).
+function ShellPane({ repoPath, kind, onNotify }) {
+  const startFn = useRef(({ rows, cols }) => api().start_shell(repoPath, kind, rows, cols)).current
+  return (
+    <PtyTerminal
+      startFn={startFn}
+      onNotify={onNotify}
+      closeOnUnmount
+      colorize={false}
+      fontSize={13}
+      className="flex-1 overflow-hidden bg-base p-1.5"
+    />
+  )
+}
 const TREE_MAX = 600
 
-function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }) {
+function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved, onAskAi, openRequest }) {
   const [files, setFiles] = useState([])
   const [loading, setLoading] = useState(true)
   const [expanded, setExpanded] = useState(() => new Set())
-  const [selectedPath, setSelectedPath] = useState(null)
+  const [selectedPath, setSelectedPath] = useState(() => readCodeTabs(repo.path).selected)
   const [fullscreen, setFullscreen] = useState(false)
   const [quickOpen, setQuickOpen] = useState(false)
+  // Side panel: the file tree or the search across the project (Ctrl+Shift+F).
+  const [sideView, setSideView] = useState('files')
+  const [searchFocus, setSearchFocus] = useState(0)
+  // Open files as tabs, like an IDE; a dot marks the ones with unsaved edits.
+  const [openTabs, setOpenTabs] = useState(() => readCodeTabs(repo.path).tabs)
+  const [jump, setJump] = useState(null) // { file, line, term, nonce } from the search
+  const [pendingClose, setPendingClose] = useState(null)
+  const [, setDraftTick] = useState(0)
+  const rootRef = useRef(null)
+  // Terminal panel at the bottom, like an IDE: shells stay alive while it is hidden.
+  const [dockOpen, setDockOpen] = useState(false)
+  const [shells, setShells] = useState([]) // { id, kind, n }
+  const [activeShell, setActiveShell] = useState(null)
+  const [shellKinds, setShellKinds] = useState(['powershell', 'cmd'])
+  const [shellMenu, setShellMenu] = useState(false)
+  const shellSeq = useRef(0)
+  useEffect(() => {
+    if (!shellMenu) return undefined
+    const close = () => setShellMenu(false)
+    const t = setTimeout(() => window.addEventListener('click', close), 0)
+    return () => {
+      clearTimeout(t)
+      window.removeEventListener('click', close)
+    }
+  }, [shellMenu])
+  const [dockHeight, setDockHeight] = useState(() => {
+    const saved = Number(localStorage.getItem('devhub.dockHeight'))
+    return saved >= DOCK_MIN ? saved : 260
+  })
+  const dockDrag = useRef(null)
+  const dockHeightRef = useRef(dockHeight)
+  dockHeightRef.current = dockHeight
+  useEffect(() => {
+    api()
+      ?.list_terminals?.()
+      ?.then((list) => Array.isArray(list) && list.length && setShellKinds(list))
+  }, [])
+  function addShell(kind) {
+    const id = `sh${++shellSeq.current}`
+    const same = shells.filter((x) => x.kind === kind).length
+    setShells((prev) => [...prev, { id, kind, n: same + 1 }])
+    setActiveShell(id)
+    setDockOpen(true)
+    setShellMenu(false)
+  }
+  function closeShell(id) {
+    const i = shells.findIndex((x) => x.id === id)
+    const next = shells.filter((x) => x.id !== id)
+    setShells(next)
+    if (activeShell === id) setActiveShell(next[Math.min(i, next.length - 1)]?.id ?? null)
+    if (next.length === 0) setDockOpen(false)
+  }
+  function toggleDock() {
+    if (dockOpen) {
+      setDockOpen(false)
+      return
+    }
+    if (shells.length === 0) addShell(shellKinds.includes('powershell') ? 'powershell' : shellKinds[0])
+    else setDockOpen(true)
+  }
+  const toggleDockRef = useRef(toggleDock)
+  toggleDockRef.current = toggleDock
   const [fileRefreshKey, setFileRefreshKey] = useState(0)
   const [pendingDelete, setPendingDelete] = useState(null) // { path, type, count }
   const [deleting, setDeleting] = useState(false)
@@ -5749,30 +6333,123 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     localStorage.setItem('devhub.codeTreeWidth', String(Math.round(drag.last)))
   }
 
+  // Bumped when something changed on disk (edit in the IDE, pull, build…).
+  const [diskTick, setDiskTick] = useState(0)
+  const lastReason = useRef(null)
+  const watchRef = useRef({ sig: null, files: {} })
+  const openTabsRef = useRef([])
+  useEffect(() => {
+    try {
+      localStorage.setItem(codeTabsKey(repo.path), JSON.stringify({ tabs: openTabs, selected: selectedPath }))
+    } catch {
+      // storage full / blocked: tabs just won't be remembered
+    }
+  }, [repo.path, openTabs, selectedPath])
+  openTabsRef.current = openTabs
+  const selectedRef = useRef(null)
+  selectedRef.current = selectedPath
+  const dirtyNoticeRef = useRef(new Set())
+  const ownSaveUntil = useRef(0) // a save of ours moves the file's mtime too
+
+  useEffect(() => {
+    watchRef.current = { sig: null, files: {} }
+  }, [repo.path])
+
+  // Polls a light fingerprint while this tab is on screen and the window is in
+  // front, and again the moment the window regains focus (you come back from the IDE).
+  useEffect(() => {
+    let alive = true
+    let busy = false
+    async function probe() {
+      if (!alive || busy || document.hidden) return
+      if (!rootRef.current || rootRef.current.offsetParent === null) return
+      busy = true
+      try {
+        const tabs = openTabsRef.current
+        const r = await api()?.repo_watch?.(repo.path, tabs)
+        if (!alive || !r || r.error) return
+        const prev = watchRef.current
+        watchRef.current = { sig: r.sig, files: r.files || {} }
+        if (prev.sig === null) return // first look: just the baseline
+        const changedOpen = tabs.filter((t) => prev.files[t] !== undefined && prev.files[t] !== r.files?.[t])
+        if (prev.sig !== r.sig || changedOpen.length) {
+          // The side effects of a refresh live in the other effects: tree
+          // reload, open file re-read, repo status.
+          setDiskTick((n) => n + 1)
+          onFileSaved?.()
+          const current = selectedRef.current
+          if (current && changedOpen.includes(current)) {
+            if (draftStore.get(`${repo.path}::${current}`) != null) {
+              // Unsaved edits win: say so once, don't overwrite them.
+              if (!dirtyNoticeRef.current.has(current)) {
+                dirtyNoticeRef.current.add(current)
+                onNotify(`${current.split('/').pop()} a changé sur le disque : tes modifications non enregistrées sont conservées.`, true)
+              }
+            } else if (Date.now() > ownSaveUntil.current) {
+              setFileRefreshKey((k) => k + 1) // not our own save: show what is on disk now
+            }
+          }
+        }
+      } finally {
+        busy = false
+      }
+    }
+    const id = setInterval(probe, 2500)
+    window.addEventListener('focus', probe)
+    document.addEventListener('visibilitychange', probe)
+    return () => {
+      alive = false
+      clearInterval(id)
+      window.removeEventListener('focus', probe)
+      document.removeEventListener('visibilitychange', probe)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repo.path])
+
   useEffect(() => {
     let alive = true
     api()
       .list_repo_files(repo.path)
       .then((r) => {
         if (!alive) return
-        setFiles(Array.isArray(r?.files) ? r.files : [])
+        const list = Array.isArray(r?.files) ? r.files : []
+        setFiles(list)
+        if (list.length) {
+          // Remembered tabs of files that were deleted or renamed meanwhile.
+          const here = new Set(list)
+          setOpenTabs((prev) => (prev.every((t) => here.has(t)) ? prev : prev.filter((t) => here.has(t))))
+          setSelectedPath((cur) => (cur && !here.has(cur) ? null : cur))
+        }
         setLoading(false)
         // Re-fetching the tree alone wouldn't refresh whichever file is
         // currently open in FileViewer — bump its key so it re-mounts and
-        // re-reads its content too.
-        setFileRefreshKey((k) => k + 1)
+        // re-reads its content too. (Not for a disk-only change: the poll above
+        // re-reads the open file itself, and only when that file changed.)
+        const reason = `${repo.path}|${refreshSignal}`
+        if (reason !== lastReason.current) setFileRefreshKey((k) => k + 1)
+        lastReason.current = reason
       })
     return () => {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [repo.path, refreshSignal])
+  }, [repo.path, refreshSignal, diskTick])
 
   useEffect(() => {
     function handleKey(e) {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault()
         setQuickOpen(true)
+      } else if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === '`' || e.code === 'Backquote')) {
+        if (!rootRef.current || rootRef.current.offsetParent === null) return
+        e.preventDefault()
+        toggleDockRef.current()
+      } else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'f') {
+        // Only the Code tab that is actually on screen answers.
+        if (!rootRef.current || rootRef.current.offsetParent === null) return
+        e.preventDefault()
+        setSideView('search')
+        setSearchFocus((n) => n + 1)
       }
     }
     window.addEventListener('keydown', handleKey)
@@ -5786,6 +6463,16 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
   // otherwise a modified/new file buried a few directories deep was
   // invisible unless you happened to click through every parent folder
   // manually. Only fires once so it doesn't fight a user's own collapsing.
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (restoredRef.current || files.length === 0) return
+    restoredRef.current = true
+    const sel = readCodeTabs(repo.path).selected
+    if (sel && files.includes(sel)) {
+      setExpanded((prev) => new Set([...prev, ...ancestorDirs(sel)]))
+      setOpenTabs((prev) => (prev.includes(sel) ? prev : [...prev, sel]))
+    }
+  }, [files])
   const autoExpandedRef = useRef(false)
   useEffect(() => {
     if (autoExpandedRef.current || files.length === 0) return
@@ -5794,6 +6481,49 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     autoExpandedRef.current = true
     setExpanded((prev) => new Set([...prev, ...changedPaths.flatMap(ancestorDirs)]))
   }, [files, statusMap])
+
+  // The unsaved-edits dots live in a module store that doesn't notify: look again
+  // now and then while there are tabs.
+  useEffect(() => {
+    if (openTabs.length === 0) return undefined
+    const id = setInterval(() => setDraftTick((n) => n + 1), 700)
+    return () => clearInterval(id)
+  }, [openTabs.length])
+  const isDirty = (path) => draftStore.get(`${repo.path}::${path}`) != null
+
+  function selectFile(path) {
+    setSelectedPath(path)
+    setOpenTabs((prev) => (prev.includes(path) ? prev : [...prev, path]))
+  }
+
+  function closeTab(path, force = false) {
+    if (!force && isDirty(path)) {
+      setPendingClose(path)
+      return
+    }
+    draftStore.clear(`${repo.path}::${path}`)
+    setPendingClose(null)
+    const i = openTabs.indexOf(path)
+    const next = openTabs.filter((t) => t !== path)
+    setOpenTabs(next)
+    setSelectedPath((cur) => (cur === path ? next[Math.min(i, next.length - 1)] ?? null : cur))
+  }
+
+  const lastOpenRequest = useRef(null)
+  useEffect(() => {
+    if (!openRequest || openRequest.nonce === lastOpenRequest.current) return
+    lastOpenRequest.current = openRequest.nonce
+    openFromSearch(openRequest.file, openRequest.line || 1, '')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest])
+
+  function openFromSearch(file, line, term) {
+    selectFile(file)
+    setExpanded((prev) => new Set([...prev, ...ancestorDirs(file)]))
+    const nonce = Date.now()
+    setJump({ file, line, term, nonce })
+    setTimeout(() => setJump((j) => (j && j.nonce === nonce ? null : j)), 2500)
+  }
 
   function toggleDir(path) {
     setExpanded((prev) => {
@@ -5824,6 +6554,7 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     const gone = pendingDelete.path
     const inside = (f) => f === gone || f.startsWith(`${gone}/`)
     setFiles((prev) => prev.filter((f) => !inside(f)))
+    setOpenTabs((prev) => prev.filter((f) => !inside(f)))
     setSelectedPath((prev) => (prev && inside(prev) ? null : prev))
     setPendingDelete(null)
     onNotify(`${gone} supprimé`)
@@ -5858,6 +6589,7 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
     }
     const moved = (f) => (f === old ? result.path : f.startsWith(`${old}/`) ? result.path + f.slice(old.length) : f)
     setFiles((prev) => prev.map(moved))
+    setOpenTabs((prev) => prev.map(moved))
     setSelectedPath((prev) => (prev ? moved(prev) : prev))
     setExpanded((prev) => new Set([...prev].map(moved)))
     setPendingRename(null)
@@ -5879,7 +6611,7 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
   }, [selectedPath])
 
   function openFile(path) {
-    setSelectedPath(path)
+    selectFile(path)
     setExpanded((prev) => new Set([...prev, ...ancestorDirs(path)]))
     setQuickOpen(false)
   }
@@ -5888,6 +6620,7 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
 
   return (
     <div
+      ref={rootRef}
       className={
         fullscreen
           ? 'fullscreen-below-tabs z-50 flex overflow-hidden bg-surface'
@@ -5909,15 +6642,40 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
           }`}
         />
         {resizingTree && <div className="fixed inset-0 z-50 cursor-col-resize" />}
-        <button
-          onClick={() => setQuickOpen(true)}
-          className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-border px-2 py-1.5 text-left text-[11px] text-muted hover:bg-surface-hover hover:text-text"
-        >
-          <IconSearch className="h-3.5 w-3.5" />
-          Rechercher un fichier
-          <span className="ml-auto font-mono text-[10px] text-muted/70">Ctrl+P</span>
-        </button>
-        <div className="theme-scroll flex-1 overflow-y-auto p-1.5">
+        <div className="flex shrink-0 items-center gap-0.5 border-b border-border p-1">
+          {[
+            { id: 'files', label: 'Fichiers' },
+            { id: 'search', label: 'Recherche' },
+          ].map((t) => (
+            <button
+              key={t.id}
+              onClick={() => {
+                setSideView(t.id)
+                if (t.id === 'search') setSearchFocus((n) => n + 1)
+              }}
+              title={t.id === 'search' ? 'Chercher dans tout le projet (Ctrl+Maj+F)' : undefined}
+              className={`flex-1 cursor-pointer rounded px-2 py-1 text-[11px] font-medium transition-colors ${
+                sideView === t.id ? 'bg-surface-hover text-text' : 'text-muted hover:text-text'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        {sideView === 'files' && (
+          <button
+            onClick={() => setQuickOpen(true)}
+            className="flex shrink-0 cursor-pointer items-center gap-1.5 border-b border-border px-2 py-1.5 text-left text-[11px] text-muted hover:bg-surface-hover hover:text-text"
+          >
+            <IconSearch className="h-3.5 w-3.5" />
+            Aller à un fichier
+            <span className="ml-auto font-mono text-[10px] text-muted/70">Ctrl+P</span>
+          </button>
+        )}
+        {sideView === 'search' && (
+          <ProjectSearch repoPath={repo.path} focusSignal={searchFocus} onOpen={openFromSearch} />
+        )}
+        <div className={`theme-scroll flex-1 overflow-y-auto p-1.5 ${sideView === 'files' ? '' : 'hidden'}`}>
           {sortedTreeChildren(tree).map((child) => (
             <FileTreeNode
               key={child.path}
@@ -5926,7 +6684,7 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
               expanded={expanded}
               onToggleDir={toggleDir}
               selectedPath={selectedPath}
-              onSelectFile={setSelectedPath}
+              onSelectFile={selectFile}
               repoPath={repo.path}
               onNotify={onNotify}
               onDelete={askDelete}
@@ -5956,27 +6714,193 @@ function CodeBrowserPanel({ repo, status, onNotify, refreshSignal, onFileSaved }
         />
       )}
       {quickOpen && <QuickOpenModal files={files} onSelect={openFile} onClose={() => setQuickOpen(false)} />}
-      {selectedPath ? (
-        <FileViewer
-          key={`${selectedPath}-${fileRefreshKey}`}
-          repo={repo}
-          file={selectedPath}
-          onNotify={onNotify}
-          hasChanges={!!statusMap[selectedPath]}
-          onSaved={onFileSaved}
-          projectFiles={files}
-          onOpenFile={openFile}
-          fullscreen={fullscreen}
-          onToggleFullscreen={() => setFullscreen((v) => !v)}
+      {pendingClose && (
+        <ConfirmModal
+          title="Modifications non enregistrées"
+          message={`Tes changements dans ${pendingClose.split('/').pop()} seront perdus si tu fermes cet onglet.`}
+          confirmLabel="Fermer sans enregistrer"
+          onConfirm={() => closeTab(pendingClose, true)}
+          onCancel={() => setPendingClose(null)}
         />
-      ) : (
-        <div className="flex flex-1 items-center justify-center text-xs text-muted">Sélectionne un fichier</div>
       )}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {openTabs.length > 0 && (
+          <div className="theme-scroll flex shrink-0 items-stretch overflow-x-auto border-b border-border bg-base/60">
+            {openTabs.map((t) => {
+              const name = t.split('/').pop()
+              const active = t === selectedPath
+              const dirty = isDirty(t)
+              const changed = !!statusMap[t]
+              return (
+                <div
+                  key={t}
+                  onClick={() => setSelectedPath(t)}
+                  onMouseDown={(e) => {
+                    if (e.button === 1) {
+                      e.preventDefault()
+                      closeTab(t)
+                    }
+                  }}
+                  title={t}
+                  className={`group flex max-w-[220px] shrink-0 cursor-pointer items-center gap-1.5 border-r border-border px-2.5 py-1.5 text-[12px] transition-colors ${
+                    active ? 'bg-surface text-text shadow-[inset_0_-2px_0_var(--color-accent)]' : 'text-muted hover:bg-surface-hover hover:text-text'
+                  }`}
+                >
+                  <FileTypeIcon name={name} className="h-3.5 w-3.5 shrink-0" />
+                  <span className={`truncate ${changed && !active ? 'text-warning' : ''}`}>{name}</span>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      closeTab(t)
+                    }}
+                    title="Fermer (clic molette)"
+                    className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded text-muted hover:bg-border hover:text-text"
+                  >
+                    {dirty ? (
+                      <>
+                        <span className="text-warning group-hover:hidden">●</span>
+                        <span className="hidden group-hover:inline">×</span>
+                      </>
+                    ) : (
+                      <span className={active ? '' : 'opacity-0 group-hover:opacity-100'}>×</span>
+                    )}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {selectedPath ? (
+          <FileViewer
+            key={`${selectedPath}-${fileRefreshKey}`}
+            repo={repo}
+            file={selectedPath}
+            onNotify={onNotify}
+            hasChanges={!!statusMap[selectedPath]}
+            onSaved={() => {
+              ownSaveUntil.current = Date.now() + 4000
+              onFileSaved?.()
+            }}
+            projectFiles={files}
+            onOpenFile={openFile}
+            fullscreen={fullscreen}
+            onToggleFullscreen={() => setFullscreen((v) => !v)}
+            jump={jump}
+            onAskAi={onAskAi}
+          />
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-xs text-muted">Sélectionne un fichier</div>
+        )}
+        {shells.length > 0 && (
+          <div className={`flex shrink-0 flex-col border-t border-border-strong bg-base ${dockOpen ? '' : 'hidden'}`} style={{ height: dockHeight }}>
+            <div
+              onPointerDown={(e) => {
+                e.preventDefault()
+                e.currentTarget.setPointerCapture(e.pointerId)
+                dockDrag.current = { y: e.clientY, h: dockHeight }
+              }}
+              onPointerMove={(e) => {
+                const d = dockDrag.current
+                if (!d) return
+                const max = (rootRef.current?.clientHeight || 700) - 140
+                setDockHeight(Math.min(max, Math.max(DOCK_MIN, d.h + d.y - e.clientY)))
+              }}
+              onPointerUp={(e) => {
+                if (!dockDrag.current) return
+                dockDrag.current = null
+                e.currentTarget.releasePointerCapture?.(e.pointerId)
+                localStorage.setItem('devhub.dockHeight', String(Math.round(dockHeightRef.current)))
+              }}
+              className="-mt-0.5 h-1 shrink-0 cursor-row-resize touch-none transition-colors hover:bg-accent/40"
+            />
+            <div className="flex shrink-0 items-center gap-0.5 border-b border-border px-1.5 py-1">
+              <div className="theme-scroll flex min-w-0 items-center gap-0.5 overflow-x-auto">
+              {shells.map((sh) => (
+                <div
+                  key={sh.id}
+                  onClick={() => setActiveShell(sh.id)}
+                  className={`group flex shrink-0 cursor-pointer items-center gap-1.5 rounded px-2 py-0.5 text-[11.5px] ${
+                    sh.id === activeShell ? 'bg-surface-hover text-text' : 'text-muted hover:text-text'
+                  }`}
+                >
+                  <span className="font-mono text-[10px] text-muted">&gt;_</span>
+                  {SHELL_LABELS[sh.kind] || sh.kind}
+                  {sh.n > 1 ? ` ${sh.n}` : ''}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      closeShell(sh.id)
+                    }}
+                    title="Fermer ce terminal"
+                    className="cursor-pointer text-muted/70 hover:text-danger"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              </div>
+              <div className="relative shrink-0">
+                <button
+                  type="button"
+                  onClick={() => (shellKinds.length > 1 ? setShellMenu((v) => !v) : addShell(shellKinds[0]))}
+                  title="Nouveau terminal"
+                  className="cursor-pointer rounded px-2 py-0.5 text-[13px] text-muted hover:bg-surface-hover hover:text-text"
+                >
+                  +
+                </button>
+                {shellMenu && (
+                  <div className="absolute bottom-full left-0 z-30 mb-1 min-w-[130px] overflow-hidden rounded-lg border border-border-strong bg-surface p-1 shadow-xl">
+                    {shellKinds.map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => addShell(k)}
+                        className="block w-full cursor-pointer rounded px-2.5 py-1 text-left text-[12px] text-text hover:bg-surface-hover"
+                      >
+                        {SHELL_LABELS[k] || k}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setDockOpen(false)}
+                title="Masquer le panneau (les terminaux continuent) — Ctrl+`"
+                className="ml-auto cursor-pointer rounded px-2 py-0.5 text-[11px] text-muted hover:bg-surface-hover hover:text-text"
+              >
+                ▾ Masquer
+              </button>
+            </div>
+            <div className="relative min-h-0 flex-1">
+              {shells.map((sh) => (
+                <div key={sh.id} className={`absolute inset-0 flex flex-col ${sh.id === activeShell ? '' : 'invisible'}`}>
+                  <ShellPane repoPath={repo.path} kind={sh.kind} onNotify={onNotify} />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={toggleDock}
+          className={`flex h-6 shrink-0 cursor-pointer items-center gap-2 border-t border-border px-3 text-left text-[11px] transition-colors hover:bg-surface-hover hover:text-text ${
+            dockOpen ? 'bg-surface text-text' : 'bg-base/60 text-muted'
+          }`}
+        >
+          <span className="font-mono text-[10px]">&gt;_</span>
+          Terminal
+          {shells.length > 0 && <span className="rounded-full bg-surface-hover px-1.5 text-[10px]">{shells.length}</span>}
+          <span className="ml-auto font-mono text-[10px] text-muted/70">Ctrl+`</span>
+        </button>
+      </div>
     </div>
   )
 }
 
-function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopRun, onClearRun, onBack, onRefreshList, onNotify, taskLaunch }) {
+function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopRun, onClearRun, onBack, onRefreshList, onNotify, taskLaunch, onOpenAiSettings }) {
   const [status, setStatus] = useState(repo.status)
   const [branches, setBranches] = useState([])
   const [branchBase, setBranchBase] = useState(null)
@@ -5990,6 +6914,14 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
   const [message, setMessage] = useState('')
   const [generating, setGenerating] = useState(false)
   const [genLanguage, setGenLanguage] = useState('auto')
+  // Which engine writes the message — picked each time with the Claude / Codex
+  // logos; null = the default saved in Paramètres IA.
+  const { agents: aiAgents, commitProvider } = useAiAgents()
+  const [genProvider, setGenProvider] = useState(null)
+  const genOptions = agentOptions(aiAgents, commitProvider)
+  const genEngine = genOptions.some((o) => o.id === (genProvider ?? commitProvider))
+    ? genProvider ?? commitProvider
+    : genOptions[0]?.id ?? null
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
   const [expandedFile, setExpandedFile] = useState(null)
   const [sheetFile, setSheetFile] = useState(null)
@@ -6034,14 +6966,64 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
       ?.get_ai_settings()
       ?.then((s) => s?.commit_language && setGenLanguage(s.commit_language))
   }, [])
-  const [activeTab, setActiveTab] = useState('branches')
+  const [activeTab, setActiveTab] = useState('overview')
+  // A prompt sent from this repo's own screens ("Demander à l'IA" in the Code tab)
+  // opens a session the same way a Hubi task does; the newest of the two wins.
+  const [localLaunch, setLocalLaunch] = useState(null)
+  // What kind of project this is decides which optional tabs are offered; the
+  // person can still add or hide each of them (the "+" after the tabs).
+  const [profile, setProfile] = useState(null)
+  const prefsKey = `devhub.projectTabs::${repo.path}`
+  const [tabPrefs, setTabPrefs] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(prefsKey) || '{}') || {}
+    } catch {
+      return {}
+    }
+  })
+  const [tabMenu, setTabMenu] = useState(false)
+  const [codeOpenRequest, setCodeOpenRequest] = useState(null)
   useEffect(() => {
-    if (taskLaunch && taskLaunch.path === repo.path) setActiveTab('ia')
-  }, [taskLaunch, repo.path])
+    let alive = true
+    api()
+      ?.project_profile?.(repo.path)
+      ?.then((p) => alive && p && !p.error && setProfile(p))
+      ?.catch?.(() => {})
+    return () => {
+      alive = false
+    }
+  }, [repo.path])
+  useEffect(() => {
+    try {
+      localStorage.setItem(prefsKey, JSON.stringify(tabPrefs))
+    } catch {
+      // not remembered
+    }
+  }, [prefsKey, tabPrefs])
+  useEffect(() => {
+    if (!tabMenu) return undefined
+    const close = () => setTabMenu(false)
+    const t = setTimeout(() => window.addEventListener('click', close), 0)
+    return () => {
+      clearTimeout(t)
+      window.removeEventListener('click', close)
+    }
+  }, [tabMenu])
+  const optionalTabs = [
+    { id: 'database', label: 'BDD', auto: true, hint: 'Connexion à la base de données du projet' },
+    { id: 'tests', label: 'Tests', auto: !!profile?.tests, hint: profile?.tests ? profile.tests.label : 'Aucune config de tests détectée' },
+    { id: 'tasks', label: 'Tâches', auto: true, hint: 'Tâches, TODO du code et notes' },
+    { id: 'http', label: 'Requêtes', auto: !!profile?.backend, hint: profile?.backend ? 'Un mini Postman pour ton API' : 'Pas de serveur détecté — utile pour tester une API' },
+  ]
+  const optionalShown = (t) => (tabPrefs[t.id] === 'show' ? true : tabPrefs[t.id] === 'hide' ? false : t.auto)
+  const launch = localLaunch && (!taskLaunch || localLaunch.nonce > taskLaunch.nonce) ? localLaunch : taskLaunch
+  useEffect(() => {
+    if (launch && launch.path === repo.path) setActiveTab('ai')
+  }, [launch, repo.path])
   // Tabs stay mounted once visited so switching away and back doesn't wipe
   // their state, but tabs never opened (e.g. BDD, which connects to a real
   // remote DB on mount) aren't rendered eagerly.
-  const [visitedTabs, setVisitedTabs] = useState(() => new Set(['branches']))
+  const [visitedTabs, setVisitedTabs] = useState(() => new Set(['overview']))
   useEffect(() => {
     setVisitedTabs((prev) => (prev.has(activeTab) ? prev : new Set(prev).add(activeTab)))
   }, [activeTab])
@@ -6049,7 +7031,7 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
   async function generateCommitMessage() {
     setGenerating(true)
     try {
-      const result = await api().generate_commit_message(repo.path, genLanguage, Array.from(selectedFiles))
+      const result = await api().generate_commit_message(repo.path, genLanguage, Array.from(selectedFiles), genEngine)
       if (result?.error) onNotify(result.error, true)
       else setMessage(result.message)
     } catch (e) {
@@ -6103,9 +7085,17 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
           <Button variant="subtle" onClick={onBack} className="mt-0.5 px-2" title="Retour">
             <IconChevronLeft className="h-4 w-4" />
           </Button>
-          <span className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent-bg text-accent">
-            <IconFolder className="h-4 w-4" />
-          </span>
+          <EditableIcon
+            icon={repo.icon}
+            fallback={<IconFolder className="h-4 w-4" />}
+            className="mt-0.5 h-8 w-8 rounded-lg"
+            onChange={async (data) => {
+              const r = await api().set_repo_icon(repo.path, data)
+              if (r?.error) onNotify(r.error, true)
+              else onRefreshList?.()
+            }}
+            onError={(m) => onNotify(m, true)}
+          />
           <div className="min-w-0">
             <h2 className="truncate text-base font-semibold text-text">{repo.name}</h2>
             <p className="truncate font-mono text-xs text-muted">{repo.path}</p>
@@ -6338,7 +7328,8 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
               rows={message.includes('\n') ? 5 : 1}
               className="w-full resize-y rounded-md border border-border bg-base px-2.5 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
             />
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <AgentPicker options={genOptions} value={genEngine} onChange={setGenProvider} disabled={generating} />
               <Select
                 value={genLanguage}
                 onChange={setGenLanguage}
@@ -6375,16 +7366,17 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
         </div>
       )}
 
-      <div className="theme-scroll flex items-center gap-1 overflow-x-auto border-b border-border">
+      <div className="flex items-center border-b border-border">
+        <div className="theme-scroll flex min-w-0 items-center gap-1 overflow-x-auto">
         {[
+          { id: 'overview', label: 'Aperçu' },
           { id: 'branches', label: 'Branches' },
           { id: 'contributors', label: 'Contributeurs' },
           { id: 'code', label: 'Code' },
-          { id: 'history', label: 'Historique' },
           { id: 'env', label: 'Env' },
           { id: 'ignore', label: 'Ignorer' },
           { id: 'run', label: 'Exécution' },
-          { id: 'database', label: 'BDD' },
+          ...optionalTabs.filter(optionalShown),
           { id: 'ai', label: 'IA' },
         ].map((tab) => (
           <button
@@ -6399,11 +7391,53 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
             {tab.label}
           </button>
         ))}
+        </div>
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setTabMenu((v) => !v)}
+            title="Ajouter ou masquer un onglet"
+            className="cursor-pointer rounded px-2 py-1 text-[14px] text-muted transition-colors hover:bg-surface-hover hover:text-text"
+          >
+            +
+          </button>
+          {tabMenu && (
+            <div className="absolute right-0 top-full z-30 mt-1 w-64 overflow-hidden rounded-lg border border-border-strong bg-surface p-1 shadow-xl">
+              <p className="px-2.5 py-1 text-[10.5px] uppercase tracking-wide text-muted">Onglets de ce projet</p>
+              {optionalTabs.map((t) => {
+                const on = optionalShown(t)
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => {
+                      setTabPrefs((prev) => ({ ...prev, [t.id]: on ? 'hide' : 'show' }))
+                      if (!on) setActiveTab(t.id)
+                      else if (activeTab === t.id) setActiveTab('overview') // hiding the tab being looked at
+                    }}
+                    className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left hover:bg-surface-hover"
+                  >
+                    <span className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] ${on ? 'border-accent bg-accent text-white' : 'border-border'}`}>{on ? '✓' : ''}</span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] text-text">{t.label}</span>
+                      <span className="block truncate text-[11px] text-muted">{t.hint}</span>
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Every tab stays mounted and is only hidden via CSS — switching tabs
           used to unmount the inactive ones, wiping their internal state
           (e.g. which AI session was open, DB filters/insert row in progress). */}
+      {visitedTabs.has('overview') && (
+        <div className={activeTab === 'overview' ? '' : 'hidden'}>
+          <OverviewPanel repo={repo} onNotify={onNotify} onRefreshList={onRefreshList} refreshSignal={refreshSignal} />
+        </div>
+      )}
       <div className={activeTab === 'branches' ? '' : 'hidden'}>
         {loadingBranches ? (
           <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-1.5">
@@ -6507,13 +7541,9 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
             onNotify={onNotify}
             refreshSignal={refreshSignal}
             onFileSaved={() => api()?.git_status(repo.path)?.then((s) => s && setStatus(s))}
+            onAskAi={(prompt) => setLocalLaunch({ path: repo.path, prompt, sessionId: null, nonce: Date.now() })}
+            openRequest={codeOpenRequest}
           />
-        </div>
-      )}
-
-      {visitedTabs.has('history') && (
-        <div className={activeTab === 'history' ? '' : 'hidden'}>
-          <HistoryPanel repo={repo} refreshSignal={refreshSignal} />
         </div>
       )}
 
@@ -6541,9 +7571,47 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
           <DatabasePanel repo={repo} onNotify={onNotify} />
         </div>
       )}
+      {visitedTabs.has('tests') && (
+        <div className={activeTab === 'tests' ? '' : 'hidden'}>
+          <TestsPanel
+            repo={repo}
+            setup={profile?.tests || null}
+            onNotify={onNotify}
+            onOpenFile={(file, line) => {
+              setCodeOpenRequest({ file, line, nonce: Date.now() })
+              setActiveTab('code')
+            }}
+            onAskAi={(prompt) => setLocalLaunch({ path: repo.path, prompt, sessionId: null, nonce: Date.now() })}
+            renderOutput={(id) => <PtyTerminal terminalId={id} colorize={false} fontSize={12} />}
+          />
+        </div>
+      )}
+      {visitedTabs.has('tasks') && (
+        <div className={activeTab === 'tasks' ? '' : 'hidden'}>
+          <TasksPanel
+            repo={repo}
+            onNotify={onNotify}
+            onOpenFile={(file, line) => {
+              setCodeOpenRequest({ file, line, nonce: Date.now() })
+              setActiveTab('code')
+            }}
+            onAskAi={(prompt) => setLocalLaunch({ path: repo.path, prompt, sessionId: null, nonce: Date.now() })}
+            onLaunch={(prompt, sessionId) => setLocalLaunch({ path: repo.path, prompt, sessionId, nonce: Date.now() })}
+          />
+        </div>
+      )}
+      {visitedTabs.has('http') && (
+        <div className={activeTab === 'http' ? '' : 'hidden'}>
+          <HttpPanel
+            repo={repo}
+            onNotify={onNotify}
+            onAskAi={(prompt) => setLocalLaunch({ path: repo.path, prompt, sessionId: null, nonce: Date.now() })}
+          />
+        </div>
+      )}
       {visitedTabs.has('ai') && (
         <div className={activeTab === 'ai' ? '' : 'hidden'}>
-          <AiSessionsPanel repo={repo} onNotify={onNotify} taskLaunch={taskLaunch} />
+          <AiSessionsPanel repo={repo} onNotify={onNotify} taskLaunch={launch} onOpenAiSettings={onOpenAiSettings} />
         </div>
       )}
 
@@ -6783,9 +7851,7 @@ function GroupCard({ group, onOpen, onDelete, onRename }) {
       onClick={() => !editing && onOpen(group.name)}
       className="group flex cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 text-left hover:bg-surface-hover"
     >
-      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-accent-bg text-accent">
-        <IconLayers className="h-3.5 w-3.5" />
-      </span>
+      <IconBox icon={group.icon} fallback={<IconLayers className="h-3.5 w-3.5" />} className="h-6 w-6 rounded-md" />
       <div className="min-w-0 flex-1">
         {editing ? (
           <input
@@ -7106,31 +8172,105 @@ function ProcessesPanel({
   )
 }
 
-// Providers that run a real agent (IA tab sessions, Hubi tasks and
-// notifications); the others only write commit messages.
-const AGENT_PROVIDER_IDS = ['claude-code', 'codex']
+// Top of the Projets list: what needs a look right now, from the statuses already
+// loaded (no extra git calls). One card per project that has something to do.
+function AttentionStrip({ repos, onOpen }) {
+  const items = []
+  let conflicts = 0
+  let toCommit = 0
+  let toPush = 0
+  let toPull = 0
+  for (const r of repos) {
+    const st = r.status
+    if (!st || st.error) continue
+    const changes = (st.dirty || 0) + (st.untracked || 0)
+    const conflicted = st.conflicted?.length || 0
+    const badges = []
+    if (conflicted) {
+      conflicts += 1
+      badges.push({ tone: 'danger', text: `${conflicted} conflit${conflicted > 1 ? 's' : ''}` })
+    }
+    if (changes) {
+      toCommit += 1
+      badges.push({ tone: 'warning', text: `${changes} modif.` })
+    }
+    if (st.ahead) {
+      toPush += 1
+      badges.push({ tone: 'accent', text: `↑ ${st.ahead} à pousser` })
+    }
+    if (st.behind) {
+      toPull += 1
+      badges.push({ tone: 'muted', text: `↓ ${st.behind} à récupérer` })
+    }
+    if (badges.length) items.push({ repo: r, badges, weight: conflicted ? 0 : changes ? 1 : st.ahead ? 2 : 3 })
+  }
+  items.sort((a, b) => a.weight - b.weight)
 
-const AI_PROVIDERS = [
-  { id: 'openai', label: 'OpenAI', kind: 'api', defaultBaseUrl: 'https://api.openai.com/v1', defaultModel: 'gpt-4o-mini' },
-  { id: 'deepseek', label: 'DeepSeek', kind: 'api', defaultBaseUrl: 'https://api.deepseek.com', defaultModel: 'deepseek-chat' },
-  { id: 'anthropic', label: 'Anthropic (Claude)', kind: 'api', defaultBaseUrl: '', defaultModel: 'claude-sonnet-4-5' },
-  { id: 'custom', label: 'Autre API (URL perso)', kind: 'api', defaultBaseUrl: '', defaultModel: '' },
-  {
-    id: 'claude-code',
-    label: 'Claude Code (CLI)',
-    kind: 'cli',
-    // Skips project context (CLAUDE.md, MCP servers, tool scaffolding) that
-    // a one-shot text generation doesn't need — plain "claude -p" boots a
-    // full session and took 30s+ instead of a couple seconds for the same
-    // prompt. Keeps OAuth/subscription auth (unlike --bare).
-    defaultCliCommand: 'claude -p --setting-sources user --strict-mcp-config --tools "" --no-session-persistence',
-  },
-  { id: 'codex', label: 'Codex (CLI)', kind: 'cli', defaultCliCommand: 'codex exec' },
-  { id: 'cli', label: 'Autre CLI', kind: 'cli', defaultCliCommand: '' },
-]
+  const TONE = {
+    danger: 'border-danger/40 bg-danger-bg text-danger',
+    warning: 'border-warning/40 bg-warning-bg text-warning',
+    accent: 'border-accent/40 bg-accent-bg text-accent',
+    muted: 'border-border bg-surface-hover text-muted',
+  }
+  const stats = [
+    { n: conflicts, label: 'en conflit', tone: 'danger' },
+    { n: toCommit, label: 'à commiter', tone: 'warning' },
+    { n: toPush, label: 'à pousser', tone: 'accent' },
+    { n: toPull, label: 'à récupérer', tone: 'muted' },
+  ].filter((s) => s.n > 0)
+
+  if (repos.length === 0) return null
+  return (
+    <div className="mb-4 rounded-xl border border-border bg-surface px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+        <span className="text-[12px] font-medium text-text">À surveiller</span>
+        {items.length === 0 ? (
+          <span className="flex items-center gap-1.5 text-[12px] text-success">
+            <IconCheck className="h-3.5 w-3.5" />
+            Tout est propre : rien à commiter, pousser ou récupérer
+          </span>
+        ) : (
+          stats.map((s) => (
+            <span key={s.label} className="flex items-center gap-1.5 text-[12px] text-muted">
+              <span className={`rounded-full border px-1.5 text-[11px] font-medium ${TONE[s.tone]}`}>{s.n}</span>
+              {s.label}
+            </span>
+          ))
+        )}
+      </div>
+      {items.length > 0 && (
+        <div className="mt-2.5 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {items.slice(0, 6).map(({ repo, badges }) => (
+            <button
+              key={repo.path}
+              onClick={() => onOpen(repo.path)}
+              className="flex min-w-0 cursor-pointer flex-col gap-1.5 rounded-lg border border-border bg-base px-3 py-2 text-left transition-colors hover:border-border-strong hover:bg-surface-hover"
+            >
+              <span className="flex items-center gap-1.5">
+                {repo.icon ? <img src={repo.icon} alt="" className="h-3.5 w-3.5 shrink-0 object-contain" /> : <IconFolder className="h-3.5 w-3.5 shrink-0 text-muted" />}
+                <span className="truncate text-[12.5px] font-medium text-text">{repo.name}</span>
+                {repo.status?.branch && <span className="ml-auto max-w-[45%] truncate font-mono text-[10.5px] text-muted">{repo.status.branch}</span>}
+              </span>
+              <span className="flex flex-wrap gap-1">
+                {badges.map((b) => (
+                  <span key={b.text} className={`rounded-full border px-1.5 py-px text-[10.5px] ${TONE[b.tone]}`}>
+                    {b.text}
+                  </span>
+                ))}
+              </span>
+            </button>
+          ))}
+          {items.length > 6 && <p className="self-center px-1 text-[11.5px] text-muted">+ {items.length - 6} autre{items.length - 6 > 1 ? 's' : ''} projet{items.length - 6 > 1 ? 's' : ''}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
 
 const SHORTCUTS = [
-  { keys: 'Ctrl K', label: 'Recherche globale (fichiers, branches, tous projets)' },
+  { keys: 'Ctrl K', label: 'Palette : actions, fichiers et branches de tous les projets' },
+  { keys: 'Ctrl P', label: 'Aller à un fichier (onglet Code)' },
+  { keys: 'Ctrl Maj F', label: 'Chercher dans tout le projet (onglet Code)' },
   { keys: 'Ctrl H', label: 'Cette aide' },
   { keys: 'F11', label: 'Plein écran (pratique dans Processus)' },
   { keys: 'Échap', label: 'Fermer la fenêtre active' },
@@ -7162,11 +8302,31 @@ function ShortcutsModal({ onClose }) {
   )
 }
 
-function GlobalSearchModal({ onClose, onOpenRepo, onOpenFile }) {
+// Lower-case without accents, so "theme" finds "Thème".
+const fold = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+function GlobalSearchModal({ onClose, onOpenRepo, onOpenFile, commands = [] }) {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState(null)
   const [searching, setSearching] = useState(false)
+  const [active, setActive] = useState(0)
   const inputRef = useRef(null)
+
+  // "> " narrows the palette to actions; otherwise actions that match sit above
+  // the file / branch results.
+  const actionsOnly = query.trimStart().startsWith('>')
+  const term = fold(actionsOnly ? query.trimStart().slice(1) : query).trim()
+  const shownCommands = useMemo(() => {
+    const words = term.split(/\s+/).filter(Boolean)
+    const list = commands.filter((c) => !c.needsQuery || words.length > 0)
+    return list.filter((c) => words.every((w) => fold(`${c.group} ${c.label}`).includes(w))).slice(0, 12)
+  }, [commands, term])
+  useEffect(() => setActive(0), [term])
+
+  function runCommand(c) {
+    onClose()
+    c.run()
+  }
 
   useEffect(() => {
     inputRef.current?.focus()
@@ -7174,8 +8334,9 @@ function GlobalSearchModal({ onClose, onOpenRepo, onOpenFile }) {
 
   useEffect(() => {
     const q = query.trim()
-    if (!q) {
+    if (!q || actionsOnly) {
       setResults(null)
+      setSearching(false)
       return
     }
     setSearching(true)
@@ -7188,7 +8349,7 @@ function GlobalSearchModal({ onClose, onOpenRepo, onOpenFile }) {
       setSearching(false)
     }, 300)
     return () => clearTimeout(timer)
-  }, [query])
+  }, [query, actionsOnly])
 
   return (
     <div className="fixed inset-0 z-30 flex items-start justify-center bg-black/60 p-6 pt-24" onClick={onClose}>
@@ -7202,8 +8363,20 @@ function GlobalSearchModal({ onClose, onOpenRepo, onOpenFile }) {
             ref={inputRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Escape' && onClose()}
-            placeholder="Nom de fichier ou de branche, dans tous les projets…"
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') onClose()
+              else if (e.key === 'ArrowDown' && shownCommands.length) {
+                e.preventDefault()
+                setActive((i) => Math.min(i + 1, shownCommands.length - 1))
+              } else if (e.key === 'ArrowUp' && shownCommands.length) {
+                e.preventDefault()
+                setActive((i) => Math.max(i - 1, 0))
+              } else if (e.key === 'Enter' && shownCommands[active]) {
+                e.preventDefault()
+                runCommand(shownCommands[active])
+              }
+            }}
+            placeholder="Une action, un fichier ou une branche…  ( > pour les actions )"
             className="flex-1 bg-transparent text-sm text-text outline-none"
           />
           <button onClick={onClose} className="text-muted hover:text-text cursor-pointer">
@@ -7212,12 +8385,33 @@ function GlobalSearchModal({ onClose, onOpenRepo, onOpenFile }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-2">
-          {!query.trim() ? (
+          {shownCommands.length > 0 && (
+            <div className="mb-2">
+              <p className="px-2 pb-1 text-[10.5px] font-medium uppercase tracking-wide text-muted">Actions</p>
+              {shownCommands.map((c, i) => (
+                <button
+                  key={c.id}
+                  onClick={() => runCommand(c)}
+                  onMouseEnter={() => setActive(i)}
+                  className={`flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2 py-1.5 text-left text-[13px] ${
+                    i === active ? 'bg-accent-bg text-text' : 'text-text hover:bg-surface-hover'
+                  }`}
+                >
+                  <span className="w-20 shrink-0 text-[10.5px] uppercase tracking-wide text-muted">{c.group}</span>
+                  <span className="min-w-0 flex-1 truncate">{c.label}</span>
+                  {c.shortcut && <span className="shrink-0 rounded border border-border px-1.5 font-mono text-[10px] text-muted">{c.shortcut}</span>}
+                </button>
+              ))}
+            </div>
+          )}
+          {actionsOnly ? (
+            shownCommands.length === 0 && <p className="p-3 text-xs text-muted">Aucune action ne correspond.</p>
+          ) : !query.trim() ? (
             <p className="p-3 text-xs text-muted">Tape pour chercher dans tous tes projets à la fois.</p>
           ) : searching ? (
             <p className="p-3 text-xs text-muted">Recherche…</p>
           ) : results?.length === 0 ? (
-            <p className="p-3 text-xs text-muted">Rien ne correspond à "{query}".</p>
+            shownCommands.length === 0 && <p className="p-3 text-xs text-muted">Rien ne correspond à "{query}".</p>
           ) : (
             results?.map((r) => (
               <div key={r.path} className="mb-2 rounded-lg border border-border bg-base p-2">
@@ -7527,253 +8721,6 @@ function HubiTimerModal({ onClose, onNotify, onStarted }) {
   )
 }
 
-function AiSettingsModal({ onClose, onNotify }) {
-  const [provider, setProvider] = useState('openai')
-  const [apiKey, setApiKey] = useState('')
-  const [baseUrl, setBaseUrl] = useState('')
-  const [model, setModel] = useState('')
-  const [cliCommand, setCliCommand] = useState('')
-  const [commitLanguage, setCommitLanguage] = useState('auto')
-  const [hasKey, setHasKey] = useState(false)
-  const [loaded, setLoaded] = useState(false)
-  const [cliTools, setCliTools] = useState({ claude: true, codex: true })
-  const [testingCli, setTestingCli] = useState(false)
-  const [cliTestResult, setCliTestResult] = useState(null)
-  const [configPath, setConfigPath] = useState('')
-
-  useEffect(() => {
-    api()
-      ?.list_cli_tools()
-      ?.then((t) => t && setCliTools(t))
-  }, [])
-
-  useEffect(() => {
-    api()
-      ?.get_config_path()
-      ?.then((r) => r?.path && setConfigPath(r.path))
-  }, [])
-
-  useEffect(() => {
-    api()
-      ?.get_ai_settings()
-      ?.then((s) => {
-        if (s) {
-          setProvider(s.provider || 'openai')
-          setBaseUrl(s.base_url || '')
-          setModel(s.model || '')
-          setCliCommand(s.cli_command || '')
-          setCommitLanguage(s.commit_language || 'auto')
-          setHasKey(!!s.has_key)
-        }
-        setLoaded(true)
-      })
-  }, [])
-
-  const currentPreset = AI_PROVIDERS.find((p) => p.id === provider)
-  const isCli = currentPreset?.kind === 'cli'
-
-  function selectProvider(id) {
-    if (id === provider) return
-    setProvider(id)
-    setCliTestResult(null)
-    const preset = AI_PROVIDERS.find((p) => p.id === id)
-    if (preset) {
-      setBaseUrl(preset.defaultBaseUrl || '')
-      setModel(preset.defaultModel || '')
-      setCliCommand(preset.defaultCliCommand || '')
-    }
-  }
-
-  async function save() {
-    const result = await api().save_ai_settings(provider, apiKey, baseUrl, model, cliCommand, commitLanguage)
-    if (result?.error) onNotify(result.error, true)
-    else {
-      onNotify('Paramètres IA enregistrés')
-      onClose()
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
-      <div
-        className="w-full max-w-md rounded-xl border border-border-strong bg-surface p-5 shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-semibold">Paramètres IA</h2>
-          <button onClick={onClose} className="text-muted hover:text-text cursor-pointer">
-            <IconClose className="h-4 w-4" />
-          </button>
-        </div>
-
-        {configPath && (
-          <button
-            onClick={async () => {
-              const r = await copyText(configPath)
-              onNotify(r.ok ? 'Chemin copié' : `Copie impossible : ${r.reason}`, !r.ok)
-            }}
-            title="Copier le chemin"
-            className="mb-4 flex w-full items-center gap-2 truncate rounded-md border border-border bg-base px-2.5 py-1.5 text-left text-[11px] text-muted hover:text-text cursor-pointer"
-          >
-            <IconCopy className="h-3 w-3 shrink-0" />
-            <span className="truncate">{configPath}</span>
-          </button>
-        )}
-
-        {!loaded ? (
-          <p className="text-xs text-muted">Chargement…</p>
-        ) : (
-          <div className="flex flex-col gap-3">
-            <div>
-              <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Provider</label>
-              {[
-                {
-                  title: 'Agents IA',
-                  hint: "Messages de commit, sessions dans l'onglet IA, tâches lancées depuis Hubi, notifications de Hubi.",
-                  ids: AGENT_PROVIDER_IDS,
-                },
-                {
-                  title: 'Messages de commit uniquement',
-                  hint: 'Ces providers génèrent les messages de commit, sans sessions ni suivi par Hubi.',
-                  ids: AI_PROVIDERS.map((p) => p.id).filter((id) => !AGENT_PROVIDER_IDS.includes(id)),
-                },
-              ].map((group) => {
-                const items = AI_PROVIDERS.filter((p) => group.ids.includes(p.id)).filter((p) => {
-                  // Only offer CLI providers actually installed on this machine —
-                  // but never hide the one already configured, even if it went missing.
-                  if (p.id === 'claude-code') return cliTools.claude || provider === 'claude-code'
-                  if (p.id === 'codex') return cliTools.codex || provider === 'codex'
-                  return true
-                })
-                if (!items.length) return null
-                return (
-                  <div key={group.title} className="mb-2.5">
-                    <p className="text-[11.5px] font-medium text-text">{group.title}</p>
-                    <p className="mb-1.5 text-[10.5px] text-muted">{group.hint}</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {items.map((p) => (
-                        <button
-                          key={p.id}
-                          onClick={() => selectProvider(p.id)}
-                          className={`cursor-pointer rounded-md border px-2.5 py-1 text-[12px] transition-colors duration-150 ${
-                            provider === p.id
-                              ? 'border-accent bg-accent-bg text-accent'
-                              : 'border-border text-muted hover:text-text hover:border-border-strong'
-                          }`}
-                        >
-                          {p.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-
-            {isCli ? (
-              <>
-                <p className="rounded-md bg-accent-bg px-3 py-2 text-[11px] text-accent">
-                  Pas de clé API — Dev Hub appelle le CLI déjà installé sur ta machine, avec ton abonnement existant.
-                </p>
-                <div>
-                  <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Commande CLI</label>
-                  <input
-                    value={cliCommand}
-                    onChange={(e) => setCliCommand(e.target.value)}
-                    placeholder="claude -p"
-                    className="w-full rounded-md border border-border bg-base px-2.5 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
-                  />
-                  <p className="mt-1 text-[11px] text-muted">
-                    Le prompt est ajouté automatiquement comme dernier argument.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="ghost"
-                    disabled={testingCli || !cliCommand.trim()}
-                    onClick={async () => {
-                      setTestingCli(true)
-                      setCliTestResult(null)
-                      const result = await api().test_cli_auth(cliCommand)
-                      setCliTestResult(result)
-                      setTestingCli(false)
-                    }}
-                  >
-                    <IconCheck className={`h-3.5 w-3.5 ${testingCli ? 'animate-spin' : ''}`} />
-                    {testingCli ? 'Test…' : 'Tester la connexion'}
-                  </Button>
-                  {cliTestResult && (
-                    <span className={`flex items-center gap-1 text-[11px] ${cliTestResult.ok ? 'text-success' : 'text-danger'}`}>
-                      {cliTestResult.ok ? <IconCheck className="h-3 w-3" /> : <IconAlertCircle className="h-3 w-3" />}
-                      {cliTestResult.ok ? 'CLI opérationnel' : cliTestResult.error}
-                    </span>
-                  )}
-                </div>
-              </>
-            ) : (
-              <>
-                <div>
-                  <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Clé API</label>
-                  <input
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder={hasKey ? 'Déjà enregistrée — laisse vide pour garder' : 'sk-...'}
-                    className="w-full rounded-md border border-border bg-base px-2.5 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
-                  />
-                </div>
-
-                {provider !== 'anthropic' && (
-                  <div>
-                    <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Base URL</label>
-                    <input
-                      value={baseUrl}
-                      onChange={(e) => setBaseUrl(e.target.value)}
-                      placeholder="https://api.example.com/v1"
-                      className="w-full rounded-md border border-border bg-base px-2.5 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
-                    />
-                  </div>
-                )}
-
-                <div>
-                  <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Modèle</label>
-                  <input
-                    value={model}
-                    onChange={(e) => setModel(e.target.value)}
-                    placeholder="gpt-4o-mini"
-                    className="w-full rounded-md border border-border bg-base px-2.5 py-1.5 font-mono text-xs text-text outline-none focus:border-accent"
-                  />
-                </div>
-              </>
-            )}
-
-            <div>
-              <label className="mb-1 block text-[11px] uppercase tracking-wider text-muted">Langue des messages de commit générés</label>
-              <Select
-                value={commitLanguage}
-                onChange={setCommitLanguage}
-                className="flex w-full cursor-pointer items-center justify-between gap-1 rounded-md border border-border bg-base px-2.5 py-1.5 text-xs text-text outline-none focus:border-accent"
-                options={[
-                  { value: 'auto', label: 'Auto (laisse le modèle décider)' },
-                  { value: 'fr', label: 'Français' },
-                  { value: 'en', label: 'Anglais' },
-                  { value: 'es', label: 'Espagnol' },
-                  { value: 'de', label: 'Allemand' },
-                  { value: 'pt', label: 'Portugais' },
-                ]}
-              />
-            </div>
-
-            <Button variant="primary" className="self-end" onClick={save}>
-              Enregistrer
-            </Button>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
 const THEMES = [
   { id: 'dark', label: 'Dev Hub Dark', bg: '#0a0a0c', swatch: ['#8b8b93', '#6e56cf', '#3ddc8c', '#f0616d'] },
   { id: 'light', label: 'Dev Hub Light', bg: '#ffffff', swatch: ['#63636c', '#6e56cf', '#157a3c', '#c8262c'] },
@@ -8074,6 +9021,7 @@ const DEFAULT_NAV = {
   selectedPath: null,
   selectedGroup: null,
   hubiPageOpen: false,
+  aiPageOpen: false,
   listTab: 'groups',
   groupSearch: '',
   repoSearch: '',
@@ -8174,9 +9122,13 @@ function TabStrip({ tabs, activeId, onSelect, onClose, onNew, onMove }) {
               active ? 'bg-base text-text shadow-[0_-1px_0_0_var(--color-border)]' : `text-muted ${hover} hover:text-text`
             }`}
           >
-            <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded bg-accent text-white">
-              <IconLayers className="h-3 w-3" />
-            </span>
+            {t.icon ? (
+              <img src={t.icon} alt="" draggable={false} className="h-[18px] w-[18px] shrink-0 rounded object-contain" />
+            ) : (
+              <span className="flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded bg-accent text-white">
+                <IconLayers className="h-3 w-3" />
+              </span>
+            )}
             <span className="min-w-0 flex-1 truncate">{t.title}</span>
             <button
               onClick={(e) => {
@@ -8324,7 +9276,6 @@ export default function App() {
   const [toasts, setToasts] = useState([])
   const [logs, setLogs] = useState([])
   const [logsOpen, setLogsOpen] = useState(false)
-  const [aiSettingsOpen, setAiSettingsOpen] = useState(false)
   const [createRepoOpen, setCreateRepoOpen] = useState(false)
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -8363,10 +9314,9 @@ export default function App() {
       // focused preview iframe (Processus tab) is a separate document, so
       // key events inside it never reach this window-level listener at all.
       if (e.key === 'Escape') {
-        if (globalSearchOpen || shortcutsOpen || aiSettingsOpen || createRepoOpen) {
+        if (globalSearchOpen || shortcutsOpen || createRepoOpen) {
           setGlobalSearchOpen(false)
           setShortcutsOpen(false)
-          setAiSettingsOpen(false)
           setCreateRepoOpen(false)
         }
         return
@@ -8394,7 +9344,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [globalSearchOpen, shortcutsOpen, aiSettingsOpen, createRepoOpen])
+  }, [globalSearchOpen, shortcutsOpen, createRepoOpen])
   const [themeMode, setThemeMode] = useState(() => {
     try {
       return localStorage.getItem('devhub-theme') || 'dark'
@@ -8408,12 +9358,17 @@ export default function App() {
   const themeLoaded = useRef(false)
 
   useEffect(() => {
-    api()
-      ?.get_theme()
-      ?.then((r) => {
-        if (r?.theme) setThemeMode(r.theme)
-        themeLoaded.current = true
-      })
+    if (!ready) return undefined
+    return whenApiHas('get_theme', (a) => {
+      Promise.resolve(a.get_theme())
+        .then((r) => {
+          if (r?.theme) setThemeMode(r.theme)
+          themeLoaded.current = true
+        })
+        .catch(() => {
+          themeLoaded.current = true // config unreadable: keep what localStorage gave
+        })
+    })
   }, [ready])
 
   useEffect(() => {
@@ -8423,7 +9378,7 @@ export default function App() {
     } catch {
       // ignore storage errors
     }
-    if (themeLoaded.current) api()?.set_theme(themeMode)
+    if (themeLoaded.current) api()?.set_theme?.(themeMode)
   }, [themeMode])
 
   const [zoom, setZoom] = useState(() => {
@@ -8463,15 +9418,16 @@ export default function App() {
   }, [])
   const navSetter = (key, extra) => (value) =>
     setNav((nav) => ({ [key]: typeof value === 'function' ? value(nav[key]) : value, ...(extra ? extra(value) : {}) }))
-  const { selectedPath, selectedGroup, listTab, groupSearch, repoSearch, repoGroupFilter, hubiPageOpen } = activeNav
-  // Opening a project or a group leaves the Hubi page of that tab.
-  const setSelectedPath = navSetter('selectedPath', (v) => (v ? { hubiPageOpen: false } : null))
-  const setSelectedGroup = navSetter('selectedGroup', (v) => (v ? { hubiPageOpen: false } : null))
+  const { selectedPath, selectedGroup, listTab, groupSearch, repoSearch, repoGroupFilter, hubiPageOpen, aiPageOpen } = activeNav
+  // Opening a project or a group leaves the Hubi / Paramètres IA page of that tab.
+  const setSelectedPath = navSetter('selectedPath', (v) => (v ? { hubiPageOpen: false, aiPageOpen: false } : null))
+  const setSelectedGroup = navSetter('selectedGroup', (v) => (v ? { hubiPageOpen: false, aiPageOpen: false } : null))
   const setListTab = navSetter('listTab')
   const setGroupSearch = navSetter('groupSearch')
   const setRepoSearch = navSetter('repoSearch')
   const setRepoGroupFilter = navSetter('repoGroupFilter')
-  const setHubiPageOpen = navSetter('hubiPageOpen')
+  const setHubiPageOpen = navSetter('hubiPageOpen', (v) => (v ? { aiPageOpen: false } : null))
+  const setAiPageOpen = navSetter('aiPageOpen', (v) => (v ? { hubiPageOpen: false } : null))
   // The Processus panel belongs to the tab that opened it (named after it).
   const processesOpen = !!activeNav.processesOpen
   const setProcessesOpen = navSetter('processesOpen')
@@ -8721,13 +9677,15 @@ export default function App() {
       setReady(true)
       refresh()
       api()
-        ?.list_terminals()
+        ?.list_terminals?.()
         ?.then((list) => setTerminals(Array.isArray(list) ? list : ['cmd', 'powershell']))
+        ?.catch?.(() => {})
       api()
-        ?.find_orphan_processes()
+        ?.find_orphan_processes?.()
         ?.then((list) => {
           if (Array.isArray(list) && list.length > 0) setOrphanAlert(list)
         })
+        ?.catch?.(() => {})
     }
     // Don't depend on catching the pywebviewready event: with a warm WebView2
     // cache the bridge can be injected before React mounts, so the listener
@@ -8738,7 +9696,7 @@ export default function App() {
     let timer = null
 
     function startOnce() {
-      if (started || !api()) return
+      if (started || !bridgeReady()) return
       started = true
       clearInterval(timer)
       window.removeEventListener('pywebviewready', startOnce)
@@ -8822,6 +9780,59 @@ export default function App() {
       confirmLabel: 'Retirer',
       onConfirm: () => doRemoveRepo(path),
     })
+  }
+
+  // What the Ctrl+K palette can do. Per-project actions only show once something
+  // is typed (otherwise N projects x 3 actions would bury the general ones).
+  function buildCommands() {
+    const goHome = (tab) => {
+      setSelectedPath(null)
+      setSelectedGroup(null)
+      setAiPageOpen(false)
+      setHubiPageOpen(false)
+      if (tab) setListTab(tab)
+    }
+    const list = [
+      { id: 'home', group: 'Aller à', label: "Accueil (projets)", run: () => goHome('repos') },
+      { id: 'groups', group: 'Aller à', label: 'Groupes', run: () => goHome('groups') },
+      { id: 'stats', group: 'Aller à', label: 'Statistiques', run: () => goHome('stats') },
+      { id: 'ai', group: 'Aller à', label: 'Paramètres IA (comptes Claude / Codex)', run: () => setAiPageOpen(true) },
+      {
+        id: 'hubi',
+        group: 'Aller à',
+        label: 'Hubi (réglages)',
+        run: () => {
+          refreshHubi()
+          setHubiPageOpen(true)
+        },
+      },
+      { id: 'tasks', group: 'Hubi', label: 'Tâches de Hubi', shortcut: 'Ctrl+Alt+H', run: () => setHubiTasksOpen(true) },
+      { id: 'processes', group: 'Outils', label: 'Processus et ports', run: () => setProcessesOpen(true) },
+      { id: 'browser', group: 'Outils', label: 'Ouvrir le navigateur intégré', run: () => openBrowserTab(null, 'Nouvel onglet') },
+      { id: 'newtab', group: 'Outils', label: 'Nouvel onglet Dev Hub', run: () => newTab() },
+      { id: 'create', group: 'Projets', label: 'Créer un repo (GitHub / GitLab)…', run: () => setCreateRepoOpen(true) },
+      { id: 'refresh', group: 'Projets', label: 'Rafraîchir tous les projets', run: () => refresh() },
+      { id: 'shortcuts', group: 'Aide', label: 'Raccourcis clavier', shortcut: 'Ctrl H', run: () => setShortcutsOpen(true) },
+      ...THEMES.map((t) => ({ id: `theme-${t.id}`, group: 'Thème', label: t.label, run: () => setThemeMode(t.id) })),
+    ]
+    for (const r of repos) {
+      const name = r.name || r.path.split(/[\\/]/).pop()
+      list.push(
+        { id: `open-${r.path}`, group: 'Projet', label: `Ouvrir ${name}`, needsQuery: true, run: () => setSelectedPath(r.path) },
+        {
+          id: `ai-${r.path}`,
+          group: 'IA',
+          label: `Nouvelle session IA dans ${name}`,
+          needsQuery: true,
+          run: () => {
+            setSelectedPath(r.path)
+            setTaskLaunch({ path: r.path, sessionId: null, prompt: '', nonce: Date.now() })
+          },
+        },
+        { id: `ide-${r.path}`, group: 'IDE', label: `Ouvrir ${name} dans l'IDE`, needsQuery: true, run: () => openIde(r.path, r.ide) },
+      )
+    }
+    return list
   }
 
   async function openIde(path, ide) {
@@ -8988,7 +9999,7 @@ export default function App() {
     const repo = repos.find((r) => r.path === nav.selectedPath) || null
     return {
       selectedRepo: repo,
-      showList: ready && !repo && !nav.selectedGroup && !nav.hubiPageOpen,
+      showList: ready && !repo && !nav.selectedGroup && !nav.hubiPageOpen && !nav.aiPageOpen,
       filteredGroups: groups.filter((g) => g.name.toLowerCase().includes(nav.groupSearch.trim().toLowerCase())),
       filteredRepos: repos.filter((r) => {
         const matchesSearch = `${r.name} ${r.path}`.toLowerCase().includes(nav.repoSearch.trim().toLowerCase())
@@ -9001,9 +10012,19 @@ export default function App() {
   }
   const { selectedRepo, showList } = viewOf(activeNav)
 
+  // The project's (or group's) own picture, shown in its tab like a favicon.
+  function tabIcon(nav) {
+    if (nav.processesOpen || nav.hubiPageOpen || nav.aiPageOpen) return null
+    const repo = repos.find((r) => r.path === nav.selectedPath)
+    if (repo) return repo.icon || null
+    if (nav.selectedGroup) return groups.find((g) => g.name === nav.selectedGroup)?.icon || null
+    return null
+  }
+
   function tabTitle(nav) {
     if (nav.processesOpen) return 'Processus'
     if (nav.hubiPageOpen) return 'Hubi'
+    if (nav.aiPageOpen) return 'Paramètres IA'
     const repo = repos.find((r) => r.path === nav.selectedPath)
     if (repo) return repo.name
     if (nav.selectedGroup) return nav.selectedGroup
@@ -9014,10 +10035,11 @@ export default function App() {
   // keeps each tab's subtree — and its state — across renders.
   function renderWorkspace(nav) {
     // eslint-disable-next-line no-unused-vars
-    const { selectedPath, selectedGroup, hubiPageOpen, listTab, groupSearch, repoSearch, repoGroupFilter } = nav
+    const { selectedPath, selectedGroup, hubiPageOpen, aiPageOpen, listTab, groupSearch, repoSearch, repoGroupFilter } = nav
     const { selectedRepo, showList, filteredGroups, filteredRepos } = viewOf(nav)
     return (
       <>
+        {aiPageOpen && <AiSettingsPage onClose={() => setAiPageOpen(false)} onNotify={notify} />}
         {hubiPageOpen && (
           <HubiPage
             hubi={hubi}
@@ -9075,6 +10097,7 @@ export default function App() {
 
             {listTab === 'repos' && (
               <section>
+                <AttentionStrip repos={repos} onOpen={setSelectedPath} />
                 <div className="mb-3 flex gap-2">
                   <input
                     value={repoSearch}
@@ -9206,7 +10229,7 @@ export default function App() {
           </div>
         )}
 
-        {selectedGroup && !selectedRepo && !hubiPageOpen && (
+        {selectedGroup && !selectedRepo && !hubiPageOpen && !aiPageOpen && (
           <div className="flex flex-col gap-6">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -9214,7 +10237,18 @@ export default function App() {
                   <IconChevronLeft className="h-4 w-4" />
                   Retour
                 </Button>
-                <h2 className="text-base font-semibold">{selectedGroup}</h2>
+                <EditableIcon
+                  icon={groups.find((g) => g.name === selectedGroup)?.icon}
+                  fallback={<IconLayers className="h-4 w-4" />}
+                  className="h-8 w-8 rounded-lg"
+                  onChange={async (data) => {
+                    const r = await api().set_group_icon(selectedGroup, data)
+                    if (r?.error) notify(r.error, true)
+                    else refresh()
+                  }}
+                  onError={(m) => notify(m, true)}
+                />
+                <h2 className="text-[16px] font-semibold text-text">{selectedGroup}</h2>
               </div>
               <div className="flex items-center gap-2">
                 {groupRepos.length > 0 && (
@@ -9279,7 +10313,7 @@ export default function App() {
           </div>
         )}
 
-        {selectedRepo && !hubiPageOpen && (
+        {selectedRepo && !hubiPageOpen && !aiPageOpen && (
           <RepoDetail
             repo={selectedRepo}
             ides={ides}
@@ -9296,6 +10330,7 @@ export default function App() {
             onRefreshList={refreshRepoAndGroupList}
             onNotify={notify}
             taskLaunch={taskLaunch}
+            onOpenAiSettings={() => setAiPageOpen(true)}
           />
         )}
       </>
@@ -9307,7 +10342,7 @@ export default function App() {
       {!appFullscreen && (
         <TitleBar>
           <TabStrip
-            tabs={tabs.map((t) => ({ id: t.id, title: tabTitle(t.nav) }))}
+            tabs={tabs.map((t) => ({ id: t.id, title: tabTitle(t.nav), icon: tabIcon(t.nav) }))}
             activeId={activeTabId}
             onSelect={setActiveTabId}
             onClose={closeTab}
@@ -9389,7 +10424,7 @@ export default function App() {
               {
                 label: 'Paramètres IA',
                 icon: <IconSettings className="h-3.5 w-3.5" />,
-                onClick: () => setAiSettingsOpen(true),
+                onClick: () => setAiPageOpen(true),
               },
             ]}
           />
@@ -9440,7 +10475,6 @@ export default function App() {
 
 
       {logsOpen && <LogPanel logs={logs} onClose={() => setLogsOpen(false)} />}
-      {aiSettingsOpen && <AiSettingsModal onClose={() => setAiSettingsOpen(false)} onNotify={notify} />}
       {hubiTimerOpen && (
         <HubiTimerModal
           onClose={() => setHubiTimerOpen(false)}
@@ -9466,6 +10500,7 @@ export default function App() {
       )}
       {globalSearchOpen && (
         <GlobalSearchModal
+          commands={buildCommands()}
           onClose={() => setGlobalSearchOpen(false)}
           onOpenRepo={(path) => {
             setSelectedPath(path)

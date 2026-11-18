@@ -15,6 +15,22 @@
 
   const canvas = document.getElementById('c')
   const eyes = HubiEyes.createEyes(canvas)
+  // Disposition « île » : une pastille en haut de l'écran (island.js) au lieu
+  // de la mascotte en coin. Python la fixe au démarrage (?layout=island).
+  let island = new URLSearchParams(location.search).get('layout') === 'island'
+  const islandView = HubiIsland.create(canvas, eyes)
+  // L'île se range d'elle-même quand elle n'a rien à dire : posée sur les
+  // onglets d'un navigateur, elle les cacherait en permanence. Elle sort pour
+  // un message, un changement (sessions, minuteur, tâches), ou quand on
+  // pointe le liseré qui dépasse du bord de l'écran.
+  const ACTIVE_MS = 5000
+  const PEEK_HOVER_MS = 250
+  let lastActive = performance.now()
+  let peekMs = 0
+  let openedByPeek = false
+  let expandedNow = true
+  let pillRect = null
+  document.body.classList.toggle('island', island)
 
   let base = 'normal' // humeur persistante (forcée depuis le menu ou plus tard par les sessions)
   let overlay = null // { name, until } : humeur temporaire
@@ -117,7 +133,7 @@
   // seulement quand elles changent (arrondies à 4 px près).
   // Fenêtre transparente : dès le chargement (pas de flash du panneau noir).
   let frameless = new URLSearchParams(location.search).has('frameless')
-  if (frameless) eyes.setFrameless(true)
+  if (frameless || island) eyes.setFrameless(true)
   let hitsKey = ''
   let pendingHits = null
   function noteHits(rects) {
@@ -152,8 +168,43 @@
       eyes.setLook(0, 0)
     }
     eyes.step(dt)
-    eyes.render()
-    drawHud(dt)
+    if (island) {
+      const nowMs = performance.now()
+      const bubble = currentBubble()
+      // Le curseur est relatif au centre de la fenêtre (px logiques) : on le
+      // replace dans le repère du canevas.
+      let overPeek = false
+      let overPill = false
+      if (cursor) {
+        const px = cursor.x + HubiIsland.W / 2
+        const py = cursor.y + HubiIsland.H / 2
+        overPeek = Math.abs(px - HubiIsland.W / 2) < 30 && py > -6 && py < 9
+        if (pillRect) overPill = px >= pillRect[0] && px <= pillRect[0] + pillRect[2] && py >= pillRect[1] && py <= pillRect[1] + pillRect[3]
+      }
+      peekMs = overPeek ? peekMs + dt * 1000 : 0
+      if (peekMs > PEEK_HOVER_MS) {
+        openedByPeek = true
+        lastActive = nowMs
+      } else if (openedByPeek && overPill) {
+        lastActive = nowMs // ouverte au pointeur : reste tant qu'on est dessus
+      }
+      expandedNow = !!bubble || nowMs - lastActive < ACTIVE_MS
+      if (!expandedNow) openedByPeek = false
+      const rects = islandView.render(dt, {
+        mood: current,
+        bubble,
+        timer,
+        openTasks,
+        sessions,
+        accent: eyes.getBaseColor(),
+        retracted: !expandedNow,
+      })
+      pillRect = rects[0]
+      noteHits(rects)
+    } else {
+      eyes.render()
+      drawHud(dt)
+    }
     requestAnimationFrame(frame)
   }
 
@@ -199,21 +250,26 @@
     switch (cmd[0]) {
       case 'mood':
         setMood(cmd[1], cmd[2])
+        lastActive = performance.now()
         break
       case 'bubble':
         transient = cmd[1] ? { text: cmd[1], tone: cmd[3] || 'info', until: performance.now() + (cmd[2] || 6000) } : null
+        lastActive = performance.now()
         break
       case 'sticky':
         sticky = cmd[1] ? { text: cmd[1], tone: cmd[2] || 'warn' } : null
         break
       case 'timer':
         timer = cmd[1] ? { end: cmd[1], label: cmd[2] || '' } : null
+        lastActive = performance.now()
         break
       case 'tasks':
         openTasks = cmd[1] || 0
+        lastActive = performance.now()
         break
       case 'sessions':
         sessions = cmd[1] || {}
+        lastActive = performance.now()
         break
       case 'beep':
         HubiHud.beep(cmd[1])
@@ -225,9 +281,9 @@
     const dpr = window.devicePixelRatio || 1
     const w = Math.max(1, Math.round(window.innerWidth * dpr))
     const h = Math.max(1, Math.round(window.innerHeight * dpr))
-    // Le canvas garde le ratio 400:240 ; la fenêtre est déjà en 5:3.
+    // Le canvas garde le ratio de sa disposition ; la fenêtre le respecte déjà.
     canvas.width = w
-    canvas.height = Math.round((w * HubiEyes.H) / HubiEyes.W)
+    canvas.height = Math.round(island ? (w * HubiIsland.H) / HubiIsland.W : (w * HubiEyes.H) / HubiEyes.W)
   }
   window.addEventListener('resize', resize)
   resize()
@@ -246,6 +302,12 @@
       if (res) {
         idle = res.idle == null ? 0 : res.idle
         cursor = res.cursor ? { x: res.cursor[0], y: res.cursor[1] } : null
+        if (res.layout && (res.layout === 'island') !== island) {
+          island = res.layout === 'island'
+          document.body.classList.toggle('island', island)
+          resize()
+          hitsKey = ''
+        }
         if (!!res.frameless !== frameless) {
           frameless = !!res.frameless
           eyes.setFrameless(frameless)
@@ -287,9 +349,35 @@
   let dragging = false
   let fallback = null // { sx, sy } si le glisser natif n'existe pas
 
+  // Un clic ferme la bulle (et acquitte l'alerte), réveille en sursaut, sinon
+  // fait rire.
+  function clickAction(a) {
+    if (island && !expandedNow) {
+      // Pastille rangée : un clic sur le liseré la fait sortir, sans rien d'autre.
+      lastActive = performance.now()
+      openedByPeek = true
+      return
+    }
+    if (bubbleVisible()) {
+      transient = null
+      sticky = null
+      if (a) a.dismiss()
+    } else if (sleeping) {
+      sleeping = false
+      setMood('startle')
+    } else {
+      setMood('laugh')
+    }
+  }
+
   canvas.addEventListener('pointerdown', async function (e) {
     if (e.button !== 0) return
     HubiHud.unlockAudio()
+    // L'île est ancrée : pas de glisser, un clic suffit.
+    if (island) {
+      clickAction(api())
+      return
+    }
     dragging = true
     canvas.setPointerCapture(e.pointerId)
     const a = api()
@@ -319,20 +407,7 @@
       const res = await a.drag_result()
       moved = res && res.moved ? res.moved : 0
     }
-    if (moved < CLICK_MOVE_MAX) {
-      // Un clic ferme la bulle (et acquitte l'alerte), réveille en sursaut,
-      // sinon fait rire.
-      if (bubbleVisible()) {
-        transient = null
-        sticky = null
-        if (a) a.dismiss()
-      } else if (sleeping) {
-        sleeping = false
-        setMood('startle')
-      } else {
-        setMood('laugh')
-      }
-    }
+    if (moved < CLICK_MOVE_MAX) clickAction(a)
   }
   canvas.addEventListener('pointerup', endPointer)
   canvas.addEventListener('pointercancel', endPointer)

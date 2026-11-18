@@ -51,6 +51,92 @@ class ReposFilesMixin:
 
         return {"results": results}
 
+    def repo_watch(self, path, open_files=None):
+        """Cheap "did anything change?" probe for the Code tab, polled every few
+        seconds: a fingerprint of git's view of the working tree plus the
+        modification time of each open file. Editing in the IDE, a build, a
+        `git pull` all move it; nothing is read beyond `git status`."""
+        import hashlib
+
+        base = Path(path)
+        if not base.is_dir():
+            return {"error": "Dossier introuvable"}
+        out, _err, code = run_git(path, "status", "--porcelain=v1", "-z")
+        head, _e2, c2 = run_git(path, "rev-parse", "HEAD")
+        h = hashlib.sha1()
+        h.update((out if code == 0 else "").encode("utf-8", "replace"))
+        h.update((head.strip() if c2 == 0 else "").encode())
+        mtimes = {}
+        for rel in (open_files or [])[:40]:
+            try:
+                st = (base / rel).stat()
+                mtimes[rel] = f"{st.st_mtime_ns}:{st.st_size}"
+            except OSError:
+                mtimes[rel] = "gone"
+        # Folders of open files: a file added next to them (IDE, generator) shows.
+        dirs = {str((base / rel).parent) for rel in (open_files or [])[:40]} | {str(base)}
+        for d in sorted(dirs):
+            try:
+                h.update(f"{d}:{Path(d).stat().st_mtime_ns}".encode())
+            except OSError:
+                pass
+        return {"sig": h.hexdigest(), "files": mtimes}
+
+    def search_in_repo(self, path, query, case_sensitive=False, regex=False, glob=None):
+        """Text search across the project's files (same walk as the file tree, so
+        gitignored files such as .env are included). Returns matches grouped by
+        file; stops at a few hundred matches so a one-letter query can't freeze
+        the UI."""
+        import fnmatch
+        import re
+
+        query = query or ""
+        if not query.strip():
+            return {"results": [], "count": 0, "truncated": False}
+        flags = 0 if case_sensitive else re.IGNORECASE
+        try:
+            pattern = re.compile(query if regex else re.escape(query), flags)
+        except re.error as e:
+            return {"error": f"Expression invalide : {e}"}
+        globs = [g.strip() for g in (glob or "").split(",") if g.strip()]
+
+        MAX_MATCHES, MAX_FILES, MAX_BYTES = 500, 150, 1_500_000
+        base = Path(path)
+        results, count, truncated = [], 0, False
+        for root, dirs, filenames in os.walk(base):
+            dirs[:] = sorted(d for d in dirs if d not in CODE_BROWSER_SKIP_DIRS)
+            for name in sorted(filenames):
+                full = Path(root) / name
+                rel = full.relative_to(base).as_posix()
+                if globs and not any(fnmatch.fnmatch(rel, g) or fnmatch.fnmatch(name, g) for g in globs):
+                    continue
+                try:
+                    if full.stat().st_size > MAX_BYTES:
+                        continue
+                    data = full.read_bytes()
+                except OSError:
+                    continue
+                if b"\0" in data[:4096]:
+                    continue  # binary
+                text = data.decode("utf-8", errors="replace")
+                found = []
+                for i, line in enumerate(text.split("\n")):
+                    m = pattern.search(line)
+                    if m:
+                        stripped = line.rstrip("\r")
+                        found.append({"line": i + 1, "text": stripped[:300], "match": m.group(0)[:120], "col": m.start()})
+                        count += 1
+                        if count >= MAX_MATCHES:
+                            break
+                if found:
+                    results.append({"file": rel, "matches": found})
+                if count >= MAX_MATCHES or len(results) >= MAX_FILES:
+                    truncated = True
+                    break
+            if truncated:
+                break
+        return {"results": results, "count": count, "truncated": truncated}
+
     def list_repo_files(self, path):
         # A real filesystem walk, not `git ls-files` — the git-based version
         # hid anything gitignored (.env, generated docs, etc.), which meant

@@ -199,8 +199,14 @@ def set_rect(win, x=None, y=None, w=None, h=None):
     nw = cur[2] if w is None else int(w)
     nh = cur[3] if h is None else int(h)
     ok = bool(user32.SetWindowPos(hwnd, None, nx, ny, nw, nh, flags))
-    if (nw, nh) != (cur[2], cur[3]) and hasattr(win, "resize"):
-        win.resize(nw, nh)  # composition window: WebView2 bounds follow
+    # Composition window only (it has its own hwnd): its resize() takes physical
+    # pixels and keeps WebView2's bounds in step. A pywebview window also has a
+    # resize(), but that one takes logical pixels and multiplies by the DPI
+    # scale again — calling it here made the quick-add bar 1.25-1.5x too big
+    # (stretched, with dead space) on scaled displays. SetWindowPos above is
+    # enough for those: the WinForms form resizes its WebView2 child itself.
+    if (nw, nh) != (cur[2], cur[3]) and getattr(win, "hwnd", None) and hasattr(win, "resize"):
+        win.resize(nw, nh)
     return ok
 
 

@@ -44,6 +44,12 @@ def show(owner_win, on_click=None):
             _user32.ShowWindow(wintypes.HWND(hwnd), SW_SHOWNOACTIVATE)
             veil.Visible = True
             _user32.SetWindowPos(wintypes.HWND(hwnd), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
+            try:
+                from .virtual_desktop import move_to_foreground_desktop
+
+                move_to_foreground_desktop([hwnd])  # the veil goes where the user is looking
+            except Exception:
+                pass
             # Keep the bar above the veil.
             owner_hwnd = owner.Handle.ToInt64()
             _user32.SetWindowPos(wintypes.HWND(owner_hwnd), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE)
@@ -62,6 +68,25 @@ def show(owner_win, on_click=None):
 
             timer.Tick += EventHandler(_tick)
             timer.Start()
+
+            # Safety net: a veil must never outlive its bar (it blocks the whole screen).
+            guard = WF.Timer()
+            guard.Interval = 400
+            born = [0]
+
+            def _guard(sender, args):
+                born[0] += 400
+                gone = veil.IsDisposed or not owner.Visible
+                if gone or born[0] > 90_000:
+                    guard.Stop()
+                    if not veil.IsDisposed:
+                        veil.Close()
+                        veil.Dispose()
+                    if _state["form"] is veil:
+                        _state["form"] = _state["owner"] = None
+
+            guard.Tick += EventHandler(_guard)
+            guard.Start()
             _state["form"], _state["owner"] = veil, owner
 
         owner.Invoke(Func[Type](_create))
@@ -72,9 +97,9 @@ def show(owner_win, on_click=None):
 
 def hide():
     veil, owner = _state["form"], _state["owner"]
-    _state["form"] = _state["owner"] = None
     if veil is None:
         return False
+    _state["form"] = _state["owner"] = None
     try:
         from System import Func, Type
 

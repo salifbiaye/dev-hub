@@ -15,7 +15,7 @@ function timeAgo(seconds) {
   return new Date(seconds * 1000).toLocaleDateString()
 }
 
-function SessionPicker({ project, cliLabel, onPick, onClose }) {
+export function SessionPicker({ project, cliLabel, onPick, onClose }) {
   const [sessions, setSessions] = useState(null)
   useEffect(() => {
     api()

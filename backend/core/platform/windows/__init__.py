@@ -145,6 +145,18 @@ class WindowsPlatform(base.PlatformService):
 
         return dim_overlay.hide()
 
+    def move_to_current_desktop(self, *wins):
+        """Bring these (WinForms-backed) windows to the virtual desktop the user is on."""
+        from . import virtual_desktop
+        from .overlay import _form
+
+        hwnds = []
+        for w in wins:
+            f = _form(w) if w is not None else None
+            if f is not None:
+                hwnds.append(int(f.Handle.ToInt64()))
+        return virtual_desktop.move_to_foreground_desktop(hwnds) if hwnds else False
+
     def overlay_rect(self, win):
         return _overlay.rect(win)
 

@@ -202,6 +202,9 @@ class PlatformService(ABC):
     def hide_dim_overlay(self):
         return False
 
+    def move_to_current_desktop(self, *wins):
+        return False
+
     def round_window_corners(self, win, border_rgb=None):
         """OS-rounded corners for a frameless window (Windows 11), with an
         optional thin border color (r, g, b). No-op where unsupported."""

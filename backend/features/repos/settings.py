@@ -7,7 +7,17 @@ import urllib.request
 
 import webview
 
-from app_config import APP_VERSION, CONFIG_PATH, GITHUB_REPO, load_config, save_config
+from app_config import (
+    AGENT_PROVIDERS,
+    APP_VERSION,
+    CONFIG_PATH,
+    GITHUB_REPO,
+    ai_cli_command,
+    ai_cli_commands,
+    default_agent,
+    load_config,
+    save_config,
+)
 
 
 def _get_json(url, headers=None, timeout=10):
@@ -80,15 +90,21 @@ class ReposSettingsMixin:
     def get_ai_settings(self):
         ai = load_config().get("ai", {})
         return {
+            # Default engine for commit messages (a CLI or an API provider).
             "provider": ai.get("provider", "openai"),
+            # Default CLI for IA sessions and Hubi.
+            "agent": default_agent(ai),
             "base_url": ai.get("base_url", ""),
             "model": ai.get("model", ""),
             "cli_command": ai.get("cli_command", ""),
+            "cli_commands": ai_cli_commands(ai),
             "has_key": bool(ai.get("api_key")),
             "commit_language": ai.get("commit_language", "auto"),
         }
 
-    def save_ai_settings(self, provider, api_key, base_url, model, cli_command=None, commit_language=None):
+    def save_ai_settings(
+        self, provider, api_key, base_url, model, cli_command=None, commit_language=None, cli_commands=None, agent=None
+    ):
         config = load_config()
         ai = config.get("ai", {})
         ai["provider"] = provider
@@ -96,8 +112,18 @@ class ReposSettingsMixin:
             ai["api_key"] = api_key
         ai["base_url"] = base_url or ""
         ai["model"] = model or ""
-        ai["cli_command"] = cli_command or ""
         ai["commit_language"] = commit_language or "auto"
+        if isinstance(cli_commands, dict):
+            # Written in full once, which also retires the legacy single
+            # `cli_command` fallback in ai_cli_commands().
+            ai["cli_commands"] = {p: (cli_commands.get(p) or "").strip() for p in AGENT_PROVIDERS}
+        elif cli_command is not None:
+            ai["cli_commands"] = {**ai_cli_commands(ai), provider: cli_command.strip()} if provider in AGENT_PROVIDERS else ai_cli_commands(ai)
+        if agent in AGENT_PROVIDERS:
+            ai["agent"] = agent
+        # Hubi (another process) and older code paths read this single field:
+        # it always mirrors the default CLI's command.
+        ai["cli_command"] = ai_cli_command(ai, default_agent(ai))
         config["ai"] = ai
         save_config(config)
         return {"ok": True}

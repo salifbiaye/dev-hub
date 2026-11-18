@@ -8,7 +8,9 @@ from pathlib import Path
 
 import webview
 
-from app_config import load_config
+import shutil
+
+from app_config import AGENT_PROVIDERS, ai_cli_command, ai_cli_commands, default_agent, load_config
 from core.platform import platform_svc
 
 # _terminals/_terminal_buffers are the single shared source of truth for
@@ -18,6 +20,7 @@ from core.platform import platform_svc
 # by importing the dicts directly.
 _terminals = {}
 _terminal_buffers = {}
+_finished_buffers = {}
 _TERMINAL_BUFFER_CAP = 200_000
 
 
@@ -38,6 +41,10 @@ def get(terminal_id):
 
 def pop(terminal_id):
     return _terminals.pop(terminal_id, None)
+
+
+def finished_buffer(terminal_id):
+    return _finished_buffers.get(terminal_id, "")
 
 
 def get_buffer(terminal_id):
@@ -80,16 +87,21 @@ def stream_terminal(terminal_id, proc):
     except Exception:
         pass
     _terminals.pop(terminal_id, None)
-    _terminal_buffers.pop(terminal_id, None)
+    # The output of a finished terminal stays readable for a while (test runs read
+    # their report from it after the process ended).
+    _finished_buffers[terminal_id] = _terminal_buffers.pop(terminal_id, "")
+    while len(_finished_buffers) > 12:
+        _finished_buffers.pop(next(iter(_finished_buffers)))
     try:
         window.evaluate_js(f"window.__devhub_onTerminalExit && window.__devhub_onTerminalExit({json.dumps(terminal_id)})")
     except Exception:
         pass
 
 
-def cli_binary():
-    """The interactive CLI from Paramètres IA (bare binary, flags dropped)."""
-    cli_command = (load_config().get("ai", {}).get("cli_command") or "").strip()
+def cli_binary(provider=None):
+    """The interactive CLI of an agent from Paramètres IA (bare binary, flags
+    dropped) — the default agent when `provider` is None."""
+    cli_command = (ai_cli_command(load_config().get("ai", {}), provider) or "").strip()
     if not cli_command:
         return None
     try:
@@ -150,24 +162,100 @@ def _codex_meta(f):
 
 
 def _norm(path):
+    path = str(path or "")
+    # Codex stores Windows paths in extended form (\\?\C:\...), which would never
+    # equal the plain path of a project.
+    if path.startswith("\\\\?\\UNC\\"):
+        path = "\\\\" + path[8:]
+    elif path.startswith("\\\\?\\"):
+        path = path[4:]
     try:
         return os.path.normcase(str(Path(path).resolve()))
     except OSError:
-        return os.path.normcase(str(path))
+        return os.path.normcase(path)
+
+
+CODEX_HOME = Path.home() / ".codex"
+
+
+def codex_state_db():
+    """Codex's thread database (state_<n>.sqlite, the highest n). Recent versions
+    keep every session there and prune the rollout files, so reading the files
+    alone shows almost nothing."""
+    try:
+        found = sorted(CODEX_HOME.glob("state_*.sqlite"), key=lambda p: int("".join(c for c in p.stem if c.isdigit()) or 0))
+    except OSError:
+        return None
+    return found[-1] if found else None
+
+
+def open_codex_db(path):
+    """Read-only connection (never writes to Codex's files)."""
+    import sqlite3
+
+    for flags in ("mode=ro", "mode=ro&immutable=1"):
+        try:
+            con = sqlite3.connect(f"file:{Path(path).as_posix()}?{flags}", uri=True, timeout=2)
+            con.execute("select 1 from sqlite_master limit 1")
+            return con
+        except sqlite3.Error:
+            continue
+    return None
+
+
+def _clean_codex_title(name, title, preview, first):
+    for candidate in (name,):
+        if candidate and candidate.strip() and candidate.strip().lower() != "guardian review":
+            return " ".join(candidate.split())[:80]
+    text = first or preview or title or ""
+    marker = "## My request for Codex:"
+    if marker in text:
+        text = text.split(marker, 1)[1]
+    elif text.lstrip().startswith("# Files mentioned"):
+        return "Session avec fichiers joints"
+    text = " ".join(text.split())
+    return text[:80] if len(text) >= 2 else None
+
+
+def _codex_db_sessions(target):
+    db = codex_state_db()
+    if not db:
+        return []
+    con = open_codex_db(db)
+    if con is None:
+        return []
+    out = []
+    try:
+        rows = con.execute(
+            "select id, name, title, preview, first_user_message, coalesce(updated_at_ms, updated_at * 1000), cwd, source "
+            "from threads where archived = 0"
+        ).fetchall()
+    except Exception:
+        rows = []
+    finally:
+        con.close()
+    for sid, name, title, preview, first, updated, cwd, source in rows:
+        src = str(source or "")
+        # Sub-agent reviews and `codex exec` one-shots (commit messages…) are not
+        # conversations anyone resumes.
+        if "subagent" in src or src == "exec":
+            continue
+        if not cwd or _norm(cwd) != target:
+            continue
+        out.append({"id": sid, "title": _clean_codex_title(name, title, preview, first) or "Session sans titre", "modified": (updated or 0) / 1000})
+    return out
 
 
 def list_codex_sessions(path):
-    root = Path.home() / ".codex" / "sessions"
-    if not root.exists():
-        return []
     target = _norm(path)
-    sessions = []
-    for f in root.rglob("rollout-*.jsonl"):
-        cwd, sid, title = _codex_meta(f)
-        if cwd and sid and _norm(cwd) == target:
-            sessions.append({"id": sid, "title": title or "Session sans titre", "modified": f.stat().st_mtime})
-    sessions.sort(key=lambda s: s["modified"], reverse=True)
-    return sessions
+    sessions = {s["id"]: s for s in _codex_db_sessions(target)}
+    root = CODEX_HOME / "sessions"
+    if root.exists():
+        for f in root.rglob("rollout-*.jsonl"):
+            cwd, sid, title = _codex_meta(f)
+            if cwd and sid and sid not in sessions and _norm(cwd) == target:
+                sessions[sid] = {"id": sid, "title": title or "Session sans titre", "modified": f.stat().st_mtime}
+    return sorted(sessions.values(), key=lambda s: s["modified"], reverse=True)
 
 
 def _claude_project_dir(path):
@@ -182,11 +270,35 @@ class TerminalMixin:
         kind = cli_kind()
         return {"kind": kind, "label": CLI_LABELS[kind], "configured": cli_binary() is not None}
 
-    def list_claude_sessions(self, path):
-        # Name kept for the existing callers: lists the sessions of whichever
-        # CLI is configured (Claude Code or Codex).
-        if cli_kind() == "codex":
+    def get_ai_agents(self):
+        """Every CLI agent with its command and whether its binary exists, for
+        the Claude/Codex pickers and the Paramètres IA page."""
+        ai = load_config().get("ai", {})
+        commands = ai_cli_commands(ai)
+        default = default_agent(ai)
+        agents = []
+        for provider in AGENT_PROVIDERS:
+            binary = cli_binary(provider)
+            installed = bool(binary and (shutil.which(binary) or Path(binary).exists()))
+            agents.append(
+                {
+                    "id": provider,
+                    "kind": cli_kind(binary) if binary else "other",
+                    "command": commands[provider],
+                    "installed": installed,
+                    "default": provider == default,
+                }
+            )
+        return {"agents": agents, "default": default, "commit_provider": ai.get("provider")}
+
+    def list_claude_sessions(self, path, provider=None):
+        # Name kept for the existing callers: lists the sessions of the given
+        # CLI (default agent when None) — Claude Code or Codex.
+        kind = cli_kind(cli_binary(provider))
+        if kind == "codex":
             return list_codex_sessions(path)
+        if kind == "other":
+            return []
         project_dir = _claude_project_dir(path)
         if not project_dir.exists():
             return []
@@ -231,11 +343,12 @@ class TerminalMixin:
         sessions.sort(key=lambda s: s["modified"], reverse=True)
         return sessions
 
-    def start_terminal(self, path, session_id=None, prompt=None, rows=24, cols=80):
+    def start_terminal(self, path, session_id=None, prompt=None, rows=24, cols=80, provider=None):
         # cli_command is tuned for the one-shot commit-message call (e.g. "claude -p")
         # and its flags (-p/exec/...) are incompatible with an interactive session —
-        # only the bare binary should be launched here.
-        binary = cli_binary()
+        # only the bare binary should be launched here. `provider` picks which
+        # agent (Claude/Codex); None = the default one.
+        binary = cli_binary(provider)
         if not binary:
             return {"error": "Commande CLI non configurée ou invalide (voir Paramètres IA)"}
 
@@ -307,6 +420,44 @@ class TerminalMixin:
         except Exception as e:
             return {"error": str(e)}
         return {"ok": True}
+
+    def start_shell(self, path, kind="powershell", rows=24, cols=80):
+        """An interactive shell (PowerShell, CMD, Git Bash…) in a PTY, for the
+        terminal panel of the Code tab. Same plumbing as the AI sessions: the
+        page writes with write_terminal and reads what stream_terminal pushes."""
+        import sys
+
+        if not path or not Path(path).is_dir():
+            return {"error": "Dossier introuvable"}
+        if sys.platform == "win32":
+            if kind == "bash":
+                launcher = getattr(platform_svc, "_git_bash_launcher", lambda: None)()
+                bash = Path(launcher).parent / "bin" / "bash.exe" if launcher else None
+                if not bash or not bash.exists():
+                    return {"error": "Git Bash introuvable"}
+                argv = [str(bash), "--login", "-i"]
+            elif kind == "cmd":
+                argv = ["cmd.exe"]
+            else:
+                argv = ["powershell.exe", "-NoLogo"]
+        else:
+            argv = [os.environ.get("SHELL") or "/bin/bash"]
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+        try:
+            rows = max(2, min(int(rows), 500))
+            cols = max(20, min(int(cols), 1000))
+        except (TypeError, ValueError):
+            rows, cols = 24, 80
+        try:
+            proc = platform_svc.spawn_pty(argv, path, env, rows, cols)
+        except Exception as e:
+            return {"error": str(e)}
+        terminal_id = str(uuid.uuid4())
+        register(terminal_id, proc)
+        threading.Thread(target=stream_terminal, args=(terminal_id, proc), daemon=True).start()
+        return {"ok": True, "terminal_id": terminal_id}
 
     def close_terminal(self, terminal_id):
         proc = pop(terminal_id)

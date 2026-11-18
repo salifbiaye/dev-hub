@@ -518,6 +518,73 @@
       if (!bare) drawZzz()
     }
 
+    // Just the two eyes (no body), centred on (cx, cy) at scale s, drawn in
+    // `ink` — the island: a black pill with Hubi's eyes lighting it. Uses the
+    // same smoothed parameters, so every mood keeps its shape.
+    function drawIslandEyes(cx, cy, s, ink) {
+      const p = params
+      const shakeX = p.shake > 0.01 ? (Math.sin(t * 61) + Math.sin(t * 37 + 1)) * 0.5 * p.shake : 0
+      const bounceY = p.bounce > 0.01 ? -Math.abs(Math.sin(t * 9)) * p.bounce : 0
+      const pulse = 1 + (p.pulse > 0.001 ? Math.sin(t * 7) * p.pulse * 0.4 : 0)
+      const arcLike = Math.max(p.arc, p.cross)
+      const blink = blinkValue * (1 - arcLike) * (1 - clamp((p.lid - 0.4) / 0.1, 0, 1))
+      const ew = p.w * 0.16 * pulse
+      let eh = p.h * 0.19 * pulse * (1 - 0.9 * blink)
+      eh *= 1 - 0.32 * clamp(p.iris, 0, 1) - 0.18 * clamp(p.slant / 38, 0, 1)
+      const half = p.sep * 0.243
+      const ox = lookX * 5 * p.look + (p.shake > 0.01 ? shakeX : 0)
+      const oy = lookY * 3 * p.look
+      ctx.save()
+      ctx.translate(cx, cy + bounceY * s * 0.5)
+      ctx.scale(s, s)
+      const pal = { ink }
+      drawBlobEye(-1, -half + ox, oy, ew, eh, pal)
+      drawBlobEye(1, half + ox, oy, ew, eh, pal)
+      ctx.restore()
+    }
+
+    // Hubi itself — the soft body and its eyes, without shadow, tablet or
+    // halo — centred on (cx, cy) at scale s: the mascot living in the island.
+    function drawIslandMascot(cx, cy, s) {
+      const p = params
+      const pal = blobPalette()
+      const shakeX = p.shake > 0.01 ? (Math.sin(t * 61) + Math.sin(t * 37 + 1)) * 0.5 * p.shake : 0
+      const bounceY = p.bounce > 0.01 ? -Math.abs(Math.sin(t * 9)) * p.bounce : 0
+      const rise = Math.sin(t * 1.5) * 2.2 + bounceY + p.sink * 0.5
+      ctx.save()
+      ctx.translate(cx + shakeX * 0.6 * s, cy + rise * s * 0.5)
+      ctx.rotate(-0.035)
+      const stretch = bounceY < -0.5 ? 1 + -bounceY * 0.012 : 1
+      ctx.scale((s * p.puff) / stretch, s * p.puff * stretch)
+      const g = ctx.createLinearGradient(0, -63, 0, 63)
+      g.addColorStop(0, rgbaOf(pal.b0))
+      g.addColorStop(1, rgbaOf(pal.b1))
+      ctx.fillStyle = g
+      roundRectPath(ctx, -88, -63, 176, 126, 60)
+      ctx.fill()
+      const hi = ctx.createRadialGradient(-40, -48, 4, -40, -48, 70)
+      hi.addColorStop(0, 'rgba(255,255,255,' + pal.hi + ')')
+      hi.addColorStop(1, 'rgba(255,255,255,0)')
+      ctx.fillStyle = hi
+      ctx.fill()
+      const pulse = 1 + (p.pulse > 0.001 ? Math.sin(t * 7) * p.pulse * 0.4 : 0)
+      const arcLike = Math.max(p.arc, p.cross)
+      const blink = blinkValue * (1 - arcLike) * (1 - clamp((p.lid - 0.4) / 0.1, 0, 1))
+      const ew = p.w * 0.16 * pulse
+      let eh = p.h * 0.19 * pulse * (1 - 0.9 * blink)
+      eh *= 1 - 0.32 * clamp(p.iris, 0, 1) - 0.18 * clamp(p.slant / 38, 0, 1)
+      const half = p.sep * 0.243
+      const ox = lookX * 5 * p.look + (p.shake > 0.01 ? shakeX : 0)
+      const oy = 4 + lookY * 3 * p.look
+      drawBlobEye(-1, -half + ox, oy, ew, eh, pal)
+      drawBlobEye(1, half + ox, oy, ew, eh, pal)
+      ctx.restore()
+    }
+
+    function getMood() {
+      return moodName
+    }
+
     function render() {
       const p = params
       const dpr = canvas.width / W
@@ -568,7 +635,7 @@
       drawBlobScene(0, 0, true)
     }
 
-    return { setMood, setBaseColor, getBaseColor, setSqueeze, setFrameless, bodyRect, setMascot, setLook, step, render, renderBare, snap, params }
+    return { setMood, getMood, setBaseColor, getBaseColor, setSqueeze, setFrameless, bodyRect, setMascot, setLook, step, render, renderBare, drawIslandEyes, drawIslandMascot, snap, params }
   }
 
   global.HubiEyes = { createEyes, MOOD_NAMES, TRANSIENT_MS, W, H, hueClose }

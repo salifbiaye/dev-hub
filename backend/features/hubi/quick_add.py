@@ -90,6 +90,10 @@ def _show(win):
         pass
     # Through WinForms so WebView2 knows it is visible (a bare ShowWindow
     # left the page unrendered, pywebview's show() ignores hidden windows).
+    try:
+        platform_svc.move_to_current_desktop(win)  # the bar is made on Hubi's first desktop
+    except Exception:
+        pass
     platform_svc.overlay_set_form_visible(win, True)
     platform_svc.round_window_corners(win, (0x2A, 0x2A, 0x30))
     platform_svc.show_dim_overlay(win, on_click=lambda: threading.Thread(target=_close, daemon=True).start())
@@ -195,12 +199,18 @@ def preload():
 def open_window():
     global _open
     with _lock:
-        if _open or _base_url is None:
+        if _base_url is None:
             return
+        # Pressed again while the bar is "open" (e.g. it was left on another
+        # virtual desktop): bring it back here instead of ignoring the key.
+        again = _open
         if _window is None:
             _create(hidden=True)  # it was closed for good: make it again
         _open = True
         win = _window
+    if again:
+        _show(win)
+        return
     # First press right after Hubi started: the page may still be loading.
     for _ in range(40):
         if _ready:

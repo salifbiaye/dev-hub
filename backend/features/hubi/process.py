@@ -32,17 +32,48 @@ def _read_pid():
         return None
 
 
-def running_pid():
-    pid = _read_pid()
-    if not pid or pid == os.getpid():
-        return None
+def _other_hubi_pids():
+    """Every `--hubi` process that isn't this one. The pid file alone is not
+    enough: it only remembers the last Hubi to start, so one that lost its entry
+    (file rewritten or removed, Hubi restarted from elsewhere) lived on as a
+    second — then third — icon in the tray. A frozen exe is two processes (a
+    bootloader and the app, same command line): ours are left out."""
+    mine = {os.getpid()}
     try:
-        proc = psutil.Process(pid)
-        if proc.is_running() and "--hubi" in proc.cmdline():
-            return pid
+        me = psutil.Process(os.getpid())
+        mine.update(c.pid for c in me.children(recursive=True))
+        parent = me.parent()
+        if parent is not None and "--hubi" in (parent.cmdline() or []):
+            mine.add(parent.pid)
     except Exception:
         pass
-    return None
+    found = []
+    for proc in psutil.process_iter(["pid", "cmdline"]):
+        try:
+            cmd = proc.info.get("cmdline") or []
+            if proc.info["pid"] in mine or "--hubi" not in cmd:
+                continue
+            # Only Dev Hub itself (frozen or from source), not any shell or
+            # tool that happens to have "--hubi" in its arguments.
+            exe = os.path.basename(cmd[0] or "").lower()
+            if exe.startswith("devhub") or exe.startswith("python"):
+                found.append(proc.info["pid"])
+        except Exception:
+            continue
+    return found
+
+
+def running_pid():
+    pid = _read_pid()
+    if pid and pid != os.getpid():
+        try:
+            proc = psutil.Process(pid)
+            if proc.is_running() and "--hubi" in proc.cmdline():
+                return pid
+        except Exception:
+            pass
+    others = _other_hubi_pids()
+    return others[0] if others else None
 
 
 def is_running():
@@ -82,16 +113,19 @@ def launch():
 
 
 def stop():
-    pid = running_pid()
-    if not pid:
-        return
-    try:
-        proc = psutil.Process(pid)
-        for child in proc.children(recursive=True):
-            child.kill()
-        proc.kill()
-    except Exception:
-        pass
+    """Stops every Hubi — including duplicates left over from earlier runs."""
+    pids = set(_other_hubi_pids())
+    pid = _read_pid()
+    if pid and pid != os.getpid():
+        pids.add(pid)
+    for pid in pids:
+        try:
+            proc = psutil.Process(pid)
+            for child in proc.children(recursive=True):
+                child.kill()
+            proc.kill()
+        except Exception:
+            pass
     try:
         PID_FILE.unlink()
     except Exception:

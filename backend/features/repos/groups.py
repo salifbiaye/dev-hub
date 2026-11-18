@@ -4,7 +4,25 @@ from app_config import load_config, save_config
 class ReposGroupsMixin:
     def list_groups(self):
         config = load_config()
-        return [{"name": g["name"], "repos": g["repos"], "count": len(g["repos"])} for g in config["groups"]]
+        return [{"name": g["name"], "repos": g["repos"], "count": len(g["repos"]), "icon": g.get("icon")} for g in config["groups"]]
+
+    def set_group_icon(self, name, icon):
+        """A custom picture for the group (data URL, already shrunk by the UI), or None to clear it."""
+        from .icons import clean_icon
+
+        icon, error = clean_icon(icon)
+        if error:
+            return {"error": error}
+        config = load_config()
+        group = next((x for x in config["groups"] if x["name"] == name), None)
+        if not group:
+            return {"error": "Groupe introuvable"}
+        if icon:
+            group["icon"] = icon
+        else:
+            group.pop("icon", None)
+        save_config(config)
+        return {"ok": True}
 
     def create_group(self, name):
         name = (name or "").strip()

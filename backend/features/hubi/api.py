@@ -69,6 +69,8 @@ class HubiMixin:
             "sound": window.sound_enabled(),
             "all_desktops": window.all_desktops(),
             "frameless": window.frameless(),
+            "layout": window.layout(),
+            "layouts": [{"id": k, "label": v} for k, v in window.LAYOUTS],
             "codex_installed": codex_watch.ROOT.exists(),
             "codex_notify": codex_watch.notify_flag(),
             # The agent chosen in Paramètres IA, and whether Hubi follows it.
@@ -113,6 +115,16 @@ class HubiMixin:
 
             config = load_config()
             config.setdefault("hubi", {})["frameless"] = bool(value)
+            save_config(config)
+            if process.is_running():
+                process.stop()
+                process.launch()
+        elif key == "layout" and value in dict(window.LAYOUTS):
+            # Another window geometry: takes effect when Hubi (re)starts.
+            from . import process
+
+            config = load_config()
+            config.setdefault("hubi", {})["layout"] = value
             save_config(config)
             if process.is_running():
                 process.stop()

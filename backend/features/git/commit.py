@@ -1,6 +1,6 @@
 import shutil
 
-from app_config import load_config
+from app_config import AGENT_PROVIDERS, ai_cli_command, load_config
 
 from .ai_client import call_anthropic, call_cli, call_openai_compatible
 from .run_git import run_git, safe_repo_file
@@ -108,10 +108,12 @@ class GitCommitMixin:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "reply": reply[:200]}
 
-    def generate_commit_message(self, path, language=None, files=None):
+    def generate_commit_message(self, path, language=None, files=None, provider=None):
         ai = load_config().get("ai", {})
-        provider = ai.get("provider")
-        is_cli = provider in ("claude-code", "codex", "cli")
+        # An explicit engine (the Claude/Codex picker next to the button)
+        # overrides the saved default for just this one generation.
+        provider = provider or ai.get("provider")
+        is_cli = provider in AGENT_PROVIDERS
         if not is_cli and not ai.get("api_key"):
             return {"error": "Aucune clé API configurée (voir Paramètres IA)"}
 
@@ -147,7 +149,7 @@ class GitCommitMixin:
 
         try:
             if is_cli:
-                message = call_cli(ai.get("cli_command"), prompt, path)
+                message = call_cli(ai_cli_command(ai, provider), prompt, path)
             elif provider == "anthropic":
                 message = call_anthropic(ai, prompt)
             else:

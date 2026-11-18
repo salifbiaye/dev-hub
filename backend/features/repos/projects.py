@@ -16,6 +16,24 @@ class ReposProjectsMixin:
         name = repo.get("name") or Path(path).name
         return {**repo, "name": name, "status": self.git_status(path)}
 
+    def set_repo_icon(self, path, icon):
+        """A custom picture for the project (data URL, already shrunk by the UI), or None to clear it."""
+        from .icons import clean_icon
+
+        icon, error = clean_icon(icon)
+        if error:
+            return {"error": error}
+        config = load_config()
+        repo = next((r for r in config["repos"] if r["path"] == path), None)
+        if not repo:
+            return {"error": "Projet introuvable"}
+        if icon:
+            repo["icon"] = icon
+        else:
+            repo.pop("icon", None)
+        save_config(config)
+        return {"ok": True}
+
     def add_repo(self, path, ide=None):
         if not path:
             return {"error": "Chemin vide"}

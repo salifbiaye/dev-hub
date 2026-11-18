@@ -9,7 +9,7 @@ from core.platform import platform_svc
 APP_DATA_DIR = platform_svc.config_dir()
 CONFIG_PATH = APP_DATA_DIR / "config.json"
 
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.10.0"
 GITHUB_REPO = "salifbiaye/dev-hub"
 
 # JetBrains Toolbox keeps a stale "idea" script pointing at an uninstalled version on this
@@ -24,6 +24,67 @@ STALE_IDE_ALIASES = {"idea": "idea1"}
 # user's existing OAuth/subscription login (unlike --bare, which requires
 # an API key and never reads OAuth or the keychain).
 FASTER_CLAUDE_CLI = 'claude -p --setting-sources user --strict-mcp-config --tools "" --no-session-persistence'
+
+# CLI-driven providers, each with its own command so Claude Code and Codex
+# can both be configured at once; the one picked per action (commit
+# message, IA session) falls back to the saved defaults below.
+AGENT_PROVIDERS = ("claude-code", "codex", "cli")
+# Codex refuses to run outside a git repository ("Not inside a trusted
+# directory") unless told otherwise — the "test connection" ping runs from
+# Dev Hub's data folder, and a project may not be a repo yet.
+CODEX_CLI = "codex exec --skip-git-repo-check"
+DEFAULT_CLI_COMMANDS = {"claude-code": FASTER_CLAUDE_CLI, "codex": CODEX_CLI, "cli": ""}
+# Commands earlier versions preset, upgraded on read to the current preset.
+_OUTDATED_COMMANDS = {"claude-code": ("claude -p",), "codex": ("codex exec",)}
+
+
+def ai_cli_commands(ai):
+    """{provider: command} for every CLI provider. Configs saved before
+    per-agent commands existed only have the single `cli_command`, which
+    belonged to whichever provider was selected then."""
+    stored = ai.get("cli_commands")
+    legacy = stored is None
+    commands = {}
+    for p in AGENT_PROVIDERS:
+        cmd = ((stored or {}).get(p) or "").strip()
+        if not cmd and legacy and ai.get("provider") == p:
+            cmd = (ai.get("cli_command") or "").strip()
+        if cmd in _OUTDATED_COMMANDS.get(p, ()):
+            cmd = ""
+        commands[p] = cmd or DEFAULT_CLI_COMMANDS[p]
+    return commands
+
+
+def _command_binary(command):
+    import shlex
+
+    try:
+        return shlex.split(command, posix=False)[0].strip('"')
+    except (ValueError, IndexError):
+        return None
+
+
+def default_agent(ai):
+    """The CLI used when nothing is chosen explicitly (IA sessions, Hubi):
+    the saved choice, else the provider if it is a CLI, else the first one
+    whose binary is actually installed."""
+    import shutil
+    from pathlib import Path
+
+    if ai.get("agent") in AGENT_PROVIDERS:
+        return ai["agent"]
+    if ai.get("provider") in AGENT_PROVIDERS:
+        return ai["provider"]
+    for p, cmd in ai_cli_commands(ai).items():
+        binary = _command_binary(cmd) if cmd else None
+        if binary and (shutil.which(binary) or Path(binary).exists()):
+            return p
+    return "claude-code"
+
+
+def ai_cli_command(ai, provider=None):
+    """Command line of `provider` (default agent when None)."""
+    return ai_cli_commands(ai).get(provider or default_agent(ai), "")
 
 
 def _read_config_file():
@@ -57,6 +118,9 @@ def load_config():
     ai = config.get("ai")
     if ai and ai.get("provider") == "claude-code" and ai.get("cli_command", "").strip() == "claude -p":
         ai["cli_command"] = FASTER_CLAUDE_CLI
+        changed = True
+    if ai and (ai.get("cli_commands") or {}).get("claude-code", "").strip() == "claude -p":
+        ai["cli_commands"]["claude-code"] = FASTER_CLAUDE_CLI
         changed = True
 
     if changed:

@@ -23,12 +23,18 @@
       canvas:active {
         cursor: grabbing;
       }
+      /* L'île est ancrée : on clique, on ne la glisse pas. */
+      body.island canvas,
+      body.island canvas:active {
+        cursor: pointer;
+      }
     </style>
   </head>
   <body>
     <canvas id="c" width="400" height="240"></canvas>
     <script src="hubi/eyes.js"></script>
     <script src="hubi/hud.js"></script>
+    <script src="hubi/island.js"></script>
     <script src="hubi/app.js"></script>
   </body>
 </html>

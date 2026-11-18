@@ -24,6 +24,14 @@ MASCOTS = [
 ]
 DEFAULT_MASCOT = "light"
 MARGIN = 16  # logical px from the top-right corner of the primary screen
+# "Île" layout: a small pill glued to the top-centre of the primary screen,
+# like a Dynamic Island. The window is only the transparent canvas around it
+# (page units: ISLAND_UNITS wide), and only the pill itself takes clicks.
+LAYOUTS = [("island", "Île (en haut, au centre)"), ("classic", "Mascotte (coin de l'écran)")]
+DEFAULT_LAYOUT = "island"
+ISLAND_SIZE = (440, 132)
+ISLAND_UNITS = 440.0
+ISLAND_TOP = 0  # logical px between the screen's top edge and the window
 TOPMOST_EVERY = 2.0  # s between z-order refreshes (full-screen apps bury it)
 
 MOODS = [
@@ -64,6 +72,7 @@ _frames = {"count": None, "at": None}
 _applied = {"size": None}
 _last_hits = {"rects": None}
 _transparent = {"on": False}  # this run uses the transparent window
+_island = {"on": False}  # this run draws the island (needs the transparent window)
 
 # poll() runs ~30x/s; the theme name comes from config.json, so it is re-read
 # at most once per THEME_REFRESH seconds.
@@ -89,6 +98,7 @@ def _cfg():
         "sound": bool(cfg.get("sound", True)),
         "all_desktops": bool(cfg.get("all_desktops", True)),
         "frameless": bool(cfg.get("frameless", False)),
+        "layout": cfg.get("layout") if cfg.get("layout") in dict(LAYOUTS) else DEFAULT_LAYOUT,
         "mascot": cfg.get("mascot") if cfg.get("mascot") in dict(MASCOTS) else DEFAULT_MASCOT,
         "x": cfg.get("x"),
         "y": cfg.get("y"),
@@ -150,6 +160,16 @@ def frameless():
     return _cfg()["frameless"]
 
 
+def layout():
+    """The setting (applies at Hubi's next start)."""
+    return _cfg()["layout"]
+
+
+def island_on():
+    """Whether this run actually draws the island."""
+    return _island["on"]
+
+
 def all_desktops():
     return _cfg()["all_desktops"]
 
@@ -180,13 +200,15 @@ def _scale():
 
 
 def _physical_size(size_key):
-    w, h = SIZES[size_key]
+    w, h = ISLAND_SIZE if _island["on"] else SIZES[size_key]
     s = _scale()
     return int(round(w * s)), int(round(h * s))
 
 
 def _default_position(pw, ph):
     primary_w, _ = platform_svc.overlay_screen()["primary"]
+    if _island["on"]:
+        return (primary_w - pw) // 2, int(round(ISLAND_TOP * _scale()))
     margin = int(round(MARGIN * _scale()))
     return primary_w - pw - margin, margin
 
@@ -201,12 +223,15 @@ def _apply_geometry():
     cfg = _cfg()
     pw, ph = _physical_size(cfg["size"])
     x, y = cfg["x"], cfg["y"]
-    if not (isinstance(x, int) and isinstance(y, int) and _on_screen(x, y, pw, ph)):
+    # The island is anchored: it never uses a dragged position.
+    if _island["on"] or not (isinstance(x, int) and isinstance(y, int) and _on_screen(x, y, pw, ph)):
         x, y = _default_position(pw, ph)
     platform_svc.overlay_set_rect(_window, x, y, pw, ph)
 
 
 def _save_position():
+    if _island["on"]:
+        return
     r = platform_svc.overlay_rect(_window)
     if r:
         _save(x=int(r[0]), y=int(r[1]))
@@ -232,6 +257,8 @@ def set_size(size_key):
         return
     _save(size=size_key)
     _applied["size"] = size_key
+    if _island["on"]:
+        return  # the island has a single size
     r = platform_svc.overlay_rect(_window)
     pw, ph = _physical_size(size_key)
     if not r:
@@ -289,6 +316,7 @@ def _watchdog():
                 # A fresh query string: setting WebView2's Source to the URL it
                 # already has is a no-op, even after its renderer crashed.
                 extra = "&frameless=1" if _transparent["on"] else ""
+                extra += "&layout=island" if _island["on"] else ""
                 win.load_url(f"{_base_url}/hubi.html?r={int(time.time())}{extra}")
             except Exception:
                 pass
@@ -308,13 +336,14 @@ def _on_closed():
 # Default clickable area (canvas units, 400 x 240) until the page sends its
 # own: the body, its hands and its shadow.
 _DEFAULT_HITS = [[100, 34, 200, 186, 56]]
+_ISLAND_HITS = [[175, 6, 90, 40, 20]]  # the resting pill
 
 
 def _set_hits(win, rects):
     r = platform_svc.overlay_rect(win)
     if r is None:
         return
-    k = r[2] / 400.0
+    k = r[2] / (ISLAND_UNITS if _island["on"] else 400.0)
     # A few pixels of margin: the region also clips what is drawn.
     m = 6
     platform_svc.overlay_set_hit_region(
@@ -328,7 +357,7 @@ def _on_transparent_ready():
     except Exception:
         pass
     _apply_geometry()
-    _set_hits(_window, _last_hits["rects"] or _DEFAULT_HITS)
+    _set_hits(_window, _last_hits["rects"] or (_ISLAND_HITS if _island["on"] else _DEFAULT_HITS))
     if not _cfg()["visible"]:
         platform_svc.overlay_set_visible(_window, False)
     threading.Thread(target=_watchdog, daemon=True).start()
@@ -341,12 +370,14 @@ def _create_transparent():
     other windows (quick add) are pywebview's."""
     from app_config import APP_DATA_DIR
 
-    w, h = _physical_size(_cfg()["size"])
+    island = _cfg()["layout"] == "island"
+    _island["on"] = island  # _physical_size() reads it
     x, y = _cfg()["x"], _cfg()["y"]
-    if not (isinstance(x, int) and isinstance(y, int)):
+    if island or not (isinstance(x, int) and isinstance(y, int)):
         x, y = -4000, -4000  # _apply_geometry() places it once ready
+    w, h = _physical_size(_cfg()["size"])
     win = platform_svc.create_transparent_window(
-        f"{_base_url}/hubi.html?frameless=1",
+        f"{_base_url}/hubi.html?frameless=1" + ("&layout=island" if island else ""),
         (x, y, w, h),
         HubiApi(),
         str(APP_DATA_DIR / "hubi-webview2"),
@@ -354,6 +385,7 @@ def _create_transparent():
         on_closed=_on_closed,
     )
     if win is None:
+        _island["on"] = False  # no transparent window here: the classic one
         return None
     _transparent["on"] = True
     webview.create_window("Hubi (ancre)", html="", hidden=True, width=1, height=1, focus=False)
@@ -366,7 +398,7 @@ def create():
     global _window
     if _window is not None or _base_url is None:
         return _window
-    if _cfg()["frameless"]:
+    if _cfg()["frameless"] or _cfg()["layout"] == "island":
         win = _create_transparent()
         if win is not None:
             _window = win
@@ -517,13 +549,14 @@ class HubiApi:
             _applied["size"] = cfg["size"]
             set_size(cfg["size"])
             if _transparent["on"]:
-                _set_hits(win, _last_hits["rects"] or _DEFAULT_HITS)
+                _set_hits(win, _last_hits["rects"] or (_ISLAND_HITS if _island["on"] else _DEFAULT_HITS))
         return {
             "cursor": cursor,
             "idle": platform_svc.idle_seconds(),
             "theme": _current_theme(),
             "mascot": cfg["mascot"],
             "frameless": _transparent["on"],
+            "layout": "island" if _island["on"] else "classic",
             "cmds": cmds,
         }
 

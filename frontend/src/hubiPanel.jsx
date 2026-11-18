@@ -216,6 +216,26 @@ export function HubiPage({ hubi, onState, onClose, onNotify, onOpenTasks, onOpen
           </section>
 
           <Section title="Apparence">
+            <Row
+              title="Disposition"
+              hint="L'île : une petite pastille en haut de l'écran, au centre, qui s'élargit quand il y a quelque chose à dire. La mascotte : Hubi en entier dans un coin. Hubi redémarre pour changer."
+            >
+              <div className="flex shrink-0 rounded-lg border border-border bg-surface p-0.5">
+                {(hubi.layouts || [{ id: 'island', label: 'Île' }, { id: 'classic', label: 'Mascotte' }]).map((l) => (
+                  <button
+                    key={l.id}
+                    disabled={busy === 'layout'}
+                    onClick={() => setOption('layout', l.id)}
+                    className={`cursor-pointer rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                      (hubi.layout || 'island') === l.id ? 'bg-accent text-white' : 'text-muted hover:text-text'
+                    }`}
+                  >
+                    {l.id === 'island' ? 'Île' : 'Mascotte'}
+                  </button>
+                ))}
+              </div>
+            </Row>
+            {(hubi.layout || 'island') === 'classic' && (
             <Row title="Taille" hint="Hubi garde son coin de l'écran, seul le bord gauche bouge.">
               <div className="flex shrink-0 rounded-lg border border-border bg-surface p-0.5">
                 {(hubi.sizes || ['S', 'M', 'L', 'XL']).map((s) => (
@@ -232,12 +252,15 @@ export function HubiPage({ hubi, onState, onClose, onNotify, onOpenTasks, onOpen
                 ))}
               </div>
             </Row>
+            )}
+            {(hubi.layout || 'island') === 'classic' && (
             <Row
               title="Mascotte seule, sans cadre"
               hint="Plus de fond noir : Hubi flotte directement sur ton bureau, et les clics à côté de lui passent aux fenêtres en dessous. Hubi redémarre pour changer de mode."
             >
               <Switch checked={!!hubi.frameless} disabled={busy === 'frameless'} onChange={(v) => setOption('frameless', v)} />
             </Row>
+            )}
             <Row
               title="Visible sur tous les bureaux"
               hint="Quand tu changes de bureau virtuel (Win+Ctrl+flèches), Hubi te suit au même coin de l'écran."
@@ -263,19 +286,33 @@ export function HubiPage({ hubi, onState, onClose, onNotify, onOpenTasks, onOpen
         <div className="flex flex-col gap-6">
           <Section title="Intégration">
             <Row
-              title={`Notifications de l'agent IA${hubi.agent_label ? ` (${hubi.agent_label})` : ''}`}
+              title="Suivre Claude Code"
+              hint="Hubi voit tes sessions Claude Code : en cours (avec leur nombre), en attente de ta réponse, terminées ou en erreur. Passe par les hooks de Claude (~/.claude/settings.json)."
+            >
+              <Switch
+                checked={!!hubi.claude_hooks}
+                disabled={busy === 'claude_hooks'}
+                onChange={(v) =>
+                  call('claude_hooks', () => api()?.hubi_set_claude_hooks?.(v), (r) =>
+                    r.claude_hooks ? 'Hubi suit tes sessions Claude Code' : 'Hubi ne suit plus tes sessions Claude Code',
+                  )
+                }
+              />
+            </Row>
+            <Row
+              title="Suivre Codex"
               hint={
-                hubi.agent_label
-                  ? `Hubi suit tes sessions ${hubi.agent_label} : en cours (avec leur nombre), en attente de réponse, terminées ou en erreur. Il suit l'agent choisi dans Paramètres IA.`
-                  : 'Choisis Claude Code ou Codex dans Paramètres IA pour que Hubi suive tes sessions.'
+                hubi.codex_installed === false
+                  ? "Codex n'a pas été trouvé sur cette machine."
+                  : "Pareil pour Codex, en même temps que Claude : Hubi lit les sessions que Codex écrit sur ton disque, que tu les lances depuis l'application Codex, son terminal ou Dev Hub."
               }
             >
               <Switch
-                checked={!!hubi.agent_notify}
-                disabled={busy === 'agent_notify' || !hubi.agent_label}
+                checked={!!hubi.codex_notify}
+                disabled={busy === 'codex_notify' || hubi.codex_installed === false}
                 onChange={(v) =>
-                  call('agent_notify', () => api()?.hubi_set_agent_notify?.(v), (r) =>
-                    r.agent_notify ? `Hubi suit tes sessions ${r.agent_label}` : `Hubi ne suit plus tes sessions ${r.agent_label}`,
+                  call('codex_notify', () => api()?.hubi_set_option?.('codex_notify', v), (r) =>
+                    r.codex_notify ? 'Hubi suit tes sessions Codex' : 'Hubi ne suit plus tes sessions Codex',
                   )
                 }
               />
