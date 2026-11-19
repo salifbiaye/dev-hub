@@ -7,6 +7,7 @@ from features.git.api import GitMixin
 from features.http_client.api import HttpClientMixin
 from features.hubi.api import HubiMixin
 from features.ide.api import IdeMixin
+from features.outputs.api import OutputsMixin
 from features.processes.api import ProcessesMixin
 from features.project_tasks.api import ProjectTasksMixin
 from features.repo_host.api import RepoHostMixin
@@ -35,5 +36,6 @@ class Api(
     HttpClientMixin,
     ProjectTasksMixin,
     UiStateMixin,
+    OutputsMixin,
 ):
     pass

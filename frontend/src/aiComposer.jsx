@@ -162,6 +162,15 @@ export default function AiComposer({ repo, provider, terminalId, screen = '', di
   const fileInputRef = useRef(null)
   const notifyRef = useRef(onNotify)
   notifyRef.current = onNotify
+  // Messages written while the agent is busy wait HERE (not in the CLI's own hidden prompt, where
+  // they vanished from view and then got glued to the next message), and go out one by one.
+  const [queue, setQueue] = useState([]) // { id, text, files, message }
+  const [inFlight, setInFlight] = useState(null) // the message just handed to the CLI, until it starts answering
+  const [sentPending, setSentPending] = useState(false) // handed over, the CLI has not started working yet
+  const pendingTimer = useRef(null)
+  const sending = useRef(false)
+  const screenRef = useRef(screen)
+  screenRef.current = screen
 
   useEffect(() => {
     let alive = true
@@ -193,6 +202,9 @@ export default function AiComposer({ repo, provider, terminalId, screen = '', di
         setSilent(false)
         setText('')
         setFiles([])
+        setQueue([])
+        setInFlight(null)
+        setSentPending(false)
       },
       insert: (s) => {
         setText((t) => t + s)
@@ -220,6 +232,9 @@ export default function AiComposer({ repo, provider, terminalId, screen = '', di
       clearTimeout(idleTimer.current)
       idleTimer.current = null
       setWorking(true)
+      clearTimeout(pendingTimer.current)
+      setSentPending(false)
+      setInFlight(null)
     } else if (!idleTimer.current) {
       idleTimer.current = setTimeout(() => {
         idleTimer.current = null
@@ -231,7 +246,10 @@ export default function AiComposer({ repo, provider, terminalId, screen = '', di
       if (m) setMode(m)
     }
   }, [screen, kind])
-  useEffect(() => () => clearTimeout(idleTimer.current), [])
+  useEffect(() => () => {
+    clearTimeout(idleTimer.current)
+    clearTimeout(pendingTimer.current)
+  }, [])
   useEffect(() => {
     onWorking?.(working)
   }, [working, onWorking])
@@ -314,23 +332,108 @@ export default function AiComposer({ repo, provider, terminalId, screen = '', di
     }
   }
 
-  async function send() {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const busy = working || sentPending || !!dialog
+  const uid = () => Math.random().toString(36).slice(2, 9)
+
+  function makeItem() {
     const body = text.trim()
-    if (!body && !files.length) return
     const refs = files.map((f) => (/\s/.test(f.path) ? `@"${f.path}"` : `@${f.path}`)).join(' ')
-    const message = [body, refs].filter(Boolean).join(body && refs ? '\n' : '')
+    return { id: uid(), text: body, files, message: [body, refs].filter(Boolean).join(body && refs ? '\n' : '') }
+  }
+
+  // Hands one message to the CLI. The Enter that submits it can get lost (the CLI is still
+  // redrawing, a menu is open…) and the message then just sits in its box: check, and press again.
+  async function submit(message) {
     // The CLI's own prompt must be empty, or our text lands after what is left
     // in it (a restored message, a stray key) and the two become one message.
-    const leftover = !dialog ? readCliInput(screen) : ''
+    const leftover = !dialog ? readCliInput(screenRef.current) : ''
     if (leftover) await clearCliInput(leftover)
     // Bracketed paste keeps multi-line prompts as one message; Enter submits.
     const ok = await write(`${BRACKETED_START}${message}${BRACKETED_END}`)
-    if (!ok) return
-    setTimeout(() => write('\r'), 80)
-    onSent?.()
-    files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview))
-    setFiles([])
+    if (!ok) return false
+    await sleep(120)
+    await write('\r')
+    const head = message.replace(/\s+/g, ' ').trim().slice(0, 20)
+    for (let i = 0; i < 3; i++) {
+      await sleep(600)
+      const left = readCliInput(screenRef.current)
+      if (!left || !left.replace(/\s+/g, ' ').includes(head)) break
+      await write('\r')
+    }
+    return true
+  }
+
+  async function deliver(item) {
+    sending.current = true
+    setInFlight(item)
+    setSentPending(true)
+    clearTimeout(pendingTimer.current)
+    pendingTimer.current = setTimeout(() => {
+      setSentPending(false)
+      setInFlight(null)
+    }, 8000)
+    try {
+      const ok = await submit(item.message)
+      if (!ok) {
+        // Not delivered: give it back to the input instead of losing it.
+        clearTimeout(pendingTimer.current)
+        setSentPending(false)
+        setInFlight(null)
+        setText(item.text)
+        setFiles(item.files)
+        return
+      }
+      onSent?.()
+      item.files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview))
+    } finally {
+      sending.current = false
+    }
+  }
+
+  async function send() {
+    if ((!text.trim() && !files.length) || uploading) return
+    const item = makeItem()
+    // Leaves the box at once: the message is visibly taken into account.
     setText('')
+    setFiles([])
+    if (busy || sending.current) {
+      setQueue((q) => [...q, item])
+      return
+    }
+    await deliver(item)
+  }
+
+  // Next queued message goes out when the agent is free (and nothing is waiting on a question).
+  useEffect(() => {
+    if (!queue.length || busy || sending.current || !terminalId) return
+    const [next, ...rest] = queue
+    setQueue(rest)
+    deliver(next)
+  }, [queue, busy, terminalId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function dropQueued(id) {
+    setQueue((q) => {
+      const gone = q.find((x) => x.id === id)
+      gone?.files.forEach((f) => f.preview && URL.revokeObjectURL(f.preview))
+      return q.filter((x) => x.id !== id)
+    })
+  }
+
+  // Back into the input to be edited; whatever was being typed takes its place in the queue.
+  function editQueued(id) {
+    const idx = queue.findIndex((x) => x.id === id)
+    if (idx < 0) return
+    const item = queue[idx]
+    const current = text.trim() || files.length ? makeItem() : null
+    setQueue((q) => {
+      const copy = [...q]
+      copy.splice(idx, 1, ...(current ? [current] : []))
+      return copy
+    })
+    setText(item.text)
+    setFiles(item.files)
+    requestAnimationFrame(() => textRef.current?.focus())
   }
 
   function pickCommand(item) {
@@ -655,6 +758,36 @@ export default function AiComposer({ repo, provider, terminalId, screen = '', di
         </div>
       )}
 
+      {(queue.length > 0 || inFlight) && (
+        <div className="flex flex-col gap-1 border-b border-border/60 px-4 py-2 font-sans">
+          <p className="text-[10.5px] font-medium uppercase tracking-wide text-muted">
+            {queue.length > 0 ? `En attente · ${queue.length} — envoyé dès que ${agentLabel} a fini` : 'Envoi…'}
+          </p>
+          {inFlight && (
+            <div className="flex items-start gap-2 rounded-md border border-dashed border-border-strong px-2.5 py-1.5 text-[12.5px] text-muted">
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
+              <span className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap break-words">{inFlight.text || inFlight.message}</span>
+              <span className="shrink-0 text-[11px]">envoi…</span>
+            </div>
+          )}
+          {queue.map((q, i) => (
+            <div key={q.id} className="flex items-start gap-2 rounded-md bg-surface px-2.5 py-1.5 text-[12.5px]">
+              <span className="mt-px w-3 shrink-0 text-right text-[11px] tabular-nums text-muted">{i + 1}</span>
+              <span className="line-clamp-2 min-w-0 flex-1 whitespace-pre-wrap break-words text-text">
+                {q.text || 'Pièce jointe'}
+                {q.files.length > 0 && <span className="ml-2 text-[11px] text-muted">📎 {q.files.length}</span>}
+              </span>
+              <button type="button" onClick={() => editQueued(q.id)} title="Remettre dans la zone de saisie pour le modifier" className="shrink-0 cursor-pointer rounded px-1.5 text-[11.5px] text-muted hover:bg-surface-hover hover:text-text">
+                ↩ modifier
+              </button>
+              <button type="button" onClick={() => dropQueued(q.id)} title="Retirer de la file d'attente" className="shrink-0 cursor-pointer rounded px-1.5 text-muted hover:bg-surface-hover hover:text-danger">
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {files.length > 0 && (
         <div className="flex flex-wrap gap-2 px-4 pt-2.5">
           {files.map((f) => (
@@ -693,10 +826,10 @@ export default function AiComposer({ repo, provider, terminalId, screen = '', di
           type="button"
           onClick={send}
           disabled={!canSend}
-          title="Envoyer (Entrée)"
+          title={busy ? `${agentLabel} travaille : le message part dès qu'il a fini (Entrée)` : 'Envoyer (Entrée)'}
           className="shrink-0 cursor-pointer rounded px-1.5 text-[12px] leading-[1.7] text-accent transition-opacity hover:bg-accent-bg disabled:cursor-default disabled:text-muted/40 disabled:hover:bg-transparent"
         >
-          ↵ envoyer
+          {busy ? '↵ mettre en file' : '↵ envoyer'}
         </button>
       </div>
 

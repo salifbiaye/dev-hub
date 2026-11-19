@@ -20,6 +20,12 @@ from features.terminal import sessions as terminal_sessions
 # themselves and their output buffers are still owned solely by
 # features/terminal/sessions.py.
 _running = {}
+# Last run per project: {name, started, ended, code} -- lets the Sorties tab say which files a run produced.
+_last_runs = {}
+
+
+def last_run(path):
+    return _last_runs.get(path)
 
 
 def _run_key(path, name):
@@ -68,6 +74,7 @@ def _stream_run_terminal(path, name, terminal_id, proc):
     user_stopped = closed_by_user or entry.get("stopped") or code in _INTERRUPTED_CODES
     _notify_hubi(path, name, code, user_stopped, entry.get("started"))
     shown_code = 0 if user_stopped or code is None else code
+    _last_runs[path] = {"name": name, "started": entry.get("started") or time.time(), "ended": time.time(), "code": shown_code, "stopped": bool(user_stopped)}
     try:
         window.evaluate_js(f"window.__devhub_onTerminalExit && window.__devhub_onTerminalExit({json.dumps(terminal_id)})")
         window.evaluate_js(
@@ -216,6 +223,7 @@ class ProcessesRunMixin:
         terminal_id = str(uuid.uuid4())
         terminal_sessions.register(terminal_id, proc)
         _running[key] = {"terminal_id": terminal_id, "config": name, "path": path, "started": time.time()}
+        _last_runs[path] = {"name": name, "started": time.time(), "ended": None, "code": None}
         threading.Thread(target=_stream_run_terminal, args=(path, name, terminal_id, proc), daemon=True).start()
         return {"ok": True, "terminal_id": terminal_id}
 

@@ -6,6 +6,14 @@ moment du `./release.sh` (le contenu sert directement de notes de release).
 
 ## Non publié
 
+### ✨ Nouveautés
+- **Onglet Sorties** : retrouve ce que tes builds ont produit sans chercher où c'est parti. Dev Hub repère tout seul les jars et wars (`target`, `build/libs`), les zips et archives, les exécutables et installeurs (`.exe`, `.msi`), les APK / AAB, les wheels Python et les dossiers de build web (`dist`, `build`, `out`, `.next` après un `next build`), à la racine et dans les sous-modules. Pour chaque sortie : taille, date (« il y a 3 min »), « Copier le chemin » et « Afficher » dans l'explorateur ; filtres Applications / Archives / Dossiers. Quand le dernier lancement fait depuis l'onglet Exécution est connu, les fichiers qu'il a produits passent en tête avec « nouveau ». L'onglet apparaît dans le « + » dès qu'une sortie existe et se met à jour tout seul. Il se place juste après Exécution et affiche une pastille avec le nombre de nouveaux fichiers dès qu'un build en a produit depuis la dernière fois qu'on l'a ouvert (elle disparaît à l'ouverture) ; le badge « nouveau » sur un fichier reste jusqu'à ta prochaine visite de l'onglet (il marque ce qui est apparu depuis ta dernière ouverture) ; les filtres n'apparaissent que s'il y a plusieurs types de sorties
+- **Messages en file d'attente sous les sessions Claude / Codex** : si l'agent travaille, ton message apparaît au-dessus de la zone de saisie (« En attente ») au lieu de disparaître, et part tout seul dès qu'il a fini, un par un. Chaque message en attente a « ↩ modifier » (il revient dans la zone de saisie) et « ✕ » (retiré de la file)
+
+### 🐛 Corrections
+- **Message envoyé mais invisible** : la touche Entrée qui valide un message pouvait être perdue (l'agent redessinait son écran) et le message restait dans la zone cachée de l'agent, d'où le second envoi pour le voir. Dev Hub vérifie maintenant que le message est bien parti et rappuie sur Entrée si besoin ; le message quitte la zone de saisie tout de suite et s'affiche « envoi… » jusqu'à ce que l'agent réponde
+- **Messages qui s'accumulaient** : un message envoyé pendant que l'agent travaillait restait caché dans son champ de saisie et se collait au message suivant. Ils attendent désormais dans la file visible
+
 ## [0.10.0] - 2026-11-18
 
 ### ✨ Nouveautés

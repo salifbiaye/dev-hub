@@ -123,7 +123,9 @@ def project_profile(path):
         for n in ("Dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")
     )
     tests = detect_tests(base)
-    return {"kinds": sorted(set(kinds)), "backend": backend, "docker": docker, "tests": tests}
+    from features.outputs.scanner import has_outputs
+
+    return {"kinds": sorted(set(kinds)), "backend": backend, "docker": docker, "tests": tests, "outputs": has_outputs(path)}
 
 
 # ------------------------------------------------------------------ running

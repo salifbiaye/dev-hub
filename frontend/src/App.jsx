@@ -104,6 +104,7 @@ import ProjectSearch from './projectSearch'
 import { TestsPanel } from './testsPanel'
 import { HttpPanel } from './httpPanel'
 import { OverviewPanel } from './overviewPanel'
+import { OutputsPanel } from './outputsPanel'
 import { TasksPanel } from './tasksPanel'
 import { CodeEditor, FilePreview, draftStore, previewKindForFile, referenceTarget } from './codeEditor'
 import { HubiTasksModal } from './hubiTasks'
@@ -6992,6 +6993,15 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
     return () => {
       alive = false
     }
+  }, [repo.path, refreshSignal])
+  useEffect(() => {
+    const again = () =>
+      api()
+        ?.project_profile?.(repo.path)
+        ?.then((p) => p && !p.error && setProfile((old) => (old && old.outputs === p.outputs && old.tests?.command === p.tests?.command ? old : p)))
+        ?.catch?.(() => {})
+    window.addEventListener('focus', again)
+    return () => window.removeEventListener('focus', again)
   }, [repo.path])
   useEffect(() => {
     try {
@@ -7010,12 +7020,49 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
     }
   }, [tabMenu])
   const optionalTabs = [
+    { id: 'outputs', label: 'Sorties', auto: !!profile?.outputs, hint: profile?.outputs ? 'Ce que tes builds ont produit (jar, zip, dist…)' : 'Aucune sortie de build détectée pour l\'instant' },
     { id: 'database', label: 'BDD', auto: true, hint: 'Connexion à la base de données du projet' },
     { id: 'tests', label: 'Tests', auto: !!profile?.tests, hint: profile?.tests ? profile.tests.label : 'Aucune config de tests détectée' },
     { id: 'tasks', label: 'Tâches', auto: true, hint: 'Tâches, TODO du code et notes' },
     { id: 'http', label: 'Requêtes', auto: !!profile?.backend, hint: profile?.backend ? 'Un mini Postman pour ton API' : 'Pas de serveur détecté — utile pour tester une API' },
   ]
+  // Files that appeared since the Sorties tab was last opened (a build just finished): a badge on the tab.
+  const [outputsNew, setOutputsNew] = useState(0)
+  const outputsSeenKey = `devhub.outputsSeen::${repo.path}`
+  useEffect(() => {
+    let alive = true
+    if (!localStorage.getItem(outputsSeenKey)) localStorage.setItem(outputsSeenKey, String(Date.now() / 1000)) // what already exists is not "new"
+    const check = async () => {
+      const since = Number(localStorage.getItem(outputsSeenKey)) || 0
+      const r = await api()?.outputs_new?.(repo.path, since)
+      if (!alive || !r || r.error) return
+      setOutputsNew(r.fresh)
+      // The first build of a project makes the tab appear without waiting for a reload.
+      if (r.total > 0) setProfile((old) => (old && !old.outputs ? { ...old, outputs: true } : old))
+    }
+    check()
+    const timer = setInterval(check, 10000)
+    window.addEventListener('focus', check)
+    return () => {
+      alive = false
+      clearInterval(timer)
+      window.removeEventListener('focus', check)
+    }
+  }, [repo.path, outputsSeenKey])
   const optionalShown = (t) => (tabPrefs[t.id] === 'show' ? true : tabPrefs[t.id] === 'hide' ? false : t.auto)
+  const [outputsSeenBefore, setOutputsSeenBefore] = useState(null) // when the tab was last looked at, before this visit
+  const onOutputsTab = useRef(false)
+  useEffect(() => {
+    // Looking at the tab = seen (also for files that land while it is open).
+    if (activeTab === 'outputs') {
+      if (!onOutputsTab.current) setOutputsSeenBefore(Number(localStorage.getItem(outputsSeenKey)) || 0)
+      onOutputsTab.current = true
+      localStorage.setItem(outputsSeenKey, String(Date.now() / 1000))
+      setOutputsNew(0)
+    } else {
+      onOutputsTab.current = false
+    }
+  }, [activeTab, outputsNew, outputsSeenKey])
   const launch = localLaunch && (!taskLaunch || localLaunch.nonce > taskLaunch.nonce) ? localLaunch : taskLaunch
   useEffect(() => {
     if (launch && launch.path === repo.path) setActiveTab('ai')
@@ -7389,6 +7436,14 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
             }`}
           >
             {tab.label}
+            {tab.id === 'outputs' && outputsNew > 0 && activeTab !== 'outputs' && (
+              <span
+                title={`${outputsNew} nouveau${outputsNew > 1 ? 'x' : ''} fichier${outputsNew > 1 ? 's' : ''} produit${outputsNew > 1 ? 's' : ''}`}
+                className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 align-middle text-[10px] font-semibold leading-none text-white"
+              >
+                {outputsNew > 9 ? '9+' : outputsNew}
+              </span>
+            )}
           </button>
         ))}
         </div>
@@ -7569,6 +7624,11 @@ function RepoDetail({ repo, ides, terminals, runningConfigs, onStartRun, onStopR
       {visitedTabs.has('database') && (
         <div className={activeTab === 'database' ? '' : 'hidden'}>
           <DatabasePanel repo={repo} onNotify={onNotify} />
+        </div>
+      )}
+      {visitedTabs.has('outputs') && (
+        <div className={activeTab === 'outputs' ? '' : 'hidden'}>
+          <OutputsPanel repo={repo} onNotify={onNotify} active={activeTab === 'outputs'} refreshSignal={refreshSignal} seenBefore={outputsSeenBefore} />
         </div>
       )}
       {visitedTabs.has('tests') && (
